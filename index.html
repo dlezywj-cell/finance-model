@@ -265,7 +265,7 @@ tr.active td.rowlink::after{color:var(--blue)}
 <div class="notes">
   <h3>口径定义（全部率值以「营业总收入」为分母）</h3>
   <ol>
-    <li><code>毛利率</code> =（营业总收入 − 营业成本）÷ 营业总收入</li>
+    <li><code>毛利率</code> =（营业总收入 − 营业成本）÷ 营业总收入；<code>毛销差</code> = 毛利率 − 销售费用率，衡量毛利扣掉销售投入后剩下的空间（毛利率不可用时同样显示「—」）</li>
     <li><code>税金及附加率</code> = 税金及附加 ÷ 营业总收入；<code>期间费用率</code> =（销售 + 管理 + 研发 + 财务）÷ 营业总收入，<b>含研发费用</b></li>
     <li><code>经营性利润率</code> = 毛利率 − 期间费用率<span id="taxNote">（默认不扣税金及附加，勾选上方选项后变为毛利率 − 税金及附加率 − 期间费用率）</span></li>
     <li><code>非经营性利润率</code> = 其他收益率 + 投资净收益率 + 公允价值变动净收益率 + 资产减值损失率 + 信用减值损失率 + 资产处置收益率</li>
@@ -444,6 +444,8 @@ function buildRows(rec,amt,opt){
         rndR=rateOf(amt.RESEARCH_EXPENSE!==null?amt.RESEARCH_EXPENSE:amt.ME_RESEARCH_EXPENSE),
         finR=rateOf(amt.FINANCE_EXPENSE);
   const expR = (TOI? (SALE+MANAGE+RND+FIN)/TOI*100 : null);
+  // 毛销差 = 毛利率 − 销售费用率（毛利率口径本身不可用时一并显示 —）
+  const gsdR = (gm===null || saleR===null)? null : gm - saleR;
   const useTax = document.getElementById('optTax').checked;
   const opMargin = (gm===null)? null : gm - expR - (useTax?(taxAddR||0):0);
 
@@ -471,7 +473,7 @@ function buildRows(rec,amt,opt){
       yoy:('yoy' in opt)? opt.yoy : amt.TOTAL_OPERATE_INCOME_YOY,
       pn:amt.PARENT_NETPROFIT===null?null:amt.PARENT_NETPROFIT/1e8,
       pny:('pny' in opt)? opt.pny : num(rec.PARENT_NETPROFIT_YOY),
-      gm:gm, taxAdd:taxAddR, sale:saleR, manage:manR, rnd:rndR, fin:finR, exp:expR,
+      gm:gm, gsd:gsdR, taxAdd:taxAddR, sale:saleR, manage:manR, rnd:rndR, fin:finR, exp:expR,
       opMargin:opMargin, oth:othR, inv:invR, fv:fvR, aimp:aimpR, cimp:cimpR, adisp:adispR,
       nonOp:nonOp, opProfit:opProfit, nbin:nbinR, nbex:nbexR, nonRec:nonRec,
       tax:taxR, net:netR, min:minR, parent:parentR, netRep:netRep, opRep:opRep, gap:gap
@@ -527,7 +529,8 @@ const ROWS=[
   {k:'pny',  n:'归母净利润 YoY', u:'%', t:'pct', c:1},
 
   {grp:'二 · 第一部分：经营性', s:'毛利减期间费用'},
-  {k:'gm',      n:'毛利率',        u:'%', t:'pct'},
+  {k:'gm',      n:'毛利率',        u:'%', t:'pct', key:1},
+  {k:'gsd',     n:'毛销差',        u:'%', t:'pct'},
   {k:'taxAdd',  n:'税金及附加率',  u:'%', t:'pct'},
   {k:'sale',    n:'销售费用率',    u:'%', t:'pct'},
   {k:'manage',  n:'管理费用率',    u:'%', t:'pct'},
