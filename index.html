@@ -40,7 +40,7 @@ a:hover{text-decoration:underline}
   font-family:inherit;
 }
 .input:focus,select:focus{border-color:var(--blue);box-shadow:0 0 0 3px rgba(0,123,255,.12)}
-#code{width:190px;font-family:var(--mono);letter-spacing:.5px}
+#code,#code2{width:168px;font-family:var(--mono);letter-spacing:.5px}
 select{min-width:96px;cursor:pointer}
 #rtype{min-width:170px}
 .tilde{color:var(--txt3);padding-bottom:9px;font-size:12px}
@@ -131,6 +131,11 @@ body.chart-open #foot{display:none}
 .chart-title{font-size:13.5px;font-weight:600;color:#1c2430}
 .chart-sub{font-size:11.5px;color:var(--txt3);margin-left:8px}
 .chart-tag{font-size:10.5px;padding:1px 7px;border-radius:20px;background:#eef2f7;color:#54627a;margin-left:8px}
+.chart-legend{display:flex;gap:14px;align-items:center;margin-left:10px}
+.chart-legend span{display:flex;align-items:center;gap:5px;font-size:11.5px;color:#5b6a82;white-space:nowrap}
+.chart-legend i{width:11px;height:11px;border-radius:3px;display:inline-block}
+.swap-btn{appearance:none;border:1px solid var(--line2);background:#fff;color:#54627a;font-size:11.5px;padding:2px 9px;border-radius:20px;cursor:pointer;font-family:inherit}
+.swap-btn:hover{background:#f2f6fc;border-color:#c3d4ea;color:var(--blue-d)}
 .chart-close{margin-left:auto;appearance:none;border:0;background:transparent;color:#9aa6b8;font-size:20px;line-height:1;cursor:pointer;padding:2px 6px;border-radius:4px}
 .chart-close:hover{background:#f0f3f7;color:#495057}
 #chartBody{padding:6px 10px 12px}
@@ -157,7 +162,8 @@ tr.active td.rowlink::after{color:var(--blue)}
   .meta{gap:10px}
   .row{gap:10px}
   .row>.field{flex:1 1 44%;min-width:0}
-  .row>.field:first-child{flex:1 1 100%}
+  .row>.field:first-child,.row>.field:nth-child(2){flex:1 1 100%}
+  #code,#code2{width:100%}
   #code{width:100%}
   select{width:100%;min-width:0}
   .btn{width:100%;padding:0 10px}
@@ -186,6 +192,11 @@ tr.active td.rowlink::after{color:var(--blue)}
       <label>股票代码 / 名称</label>
       <input class="input" id="code" placeholder="600519 或 贵州茅台" autocomplete="off" spellcheck="false">
       <div class="sug" id="sug"></div>
+    </div>
+    <div class="field">
+      <label>对比标的 <span style="color:#b8c2d1">可选</span></label>
+      <input class="input" id="code2" placeholder="留空则不对比" autocomplete="off" spellcheck="false">
+      <div class="sug" id="sug2"></div>
     </div>
     <div class="field">
       <label>起始年份</label>
@@ -244,6 +255,7 @@ tr.active td.rowlink::after{color:var(--blue)}
     <span class="chart-title" id="chartTitle">—</span>
     <span class="chart-sub" id="chartSub"></span>
     <span class="chart-tag" id="chartTag"></span>
+    <span class="chart-legend" id="chartLegend"></span>
     <button class="chart-close" id="chartClose" title="关闭">×</button>
   </div>
   <div id="chartBody"></div>
@@ -273,7 +285,7 @@ const API='https://datacenter-web.eastmoney.com/api/data/v1/get';
 const SUG='https://searchapi.eastmoney.com/api/suggest/get';
 const SUG_TOKEN='D43BF722C8E33BDC906FB84D85E326E8';
 const NOW=new Date().getFullYear();
-let STATE={raw:null,idx:null,meta:null,cols:null,chartKey:null};
+let STATE={raw:null,idx:null,meta:null,cols:null,chartKey:null,raw2:null,idx2:null,meta2:null,colsOther:null,showWhich:1};
 
 /* ============ JSONP ============ */
 let seq=0;
@@ -526,14 +538,24 @@ const ROWS=[
 
 /* ============ 渲染 ============ */
 function render(){
-  const all=STATE.raw||[];
   const from=+document.getElementById('from').value;
   const to=+document.getElementById('to').value;
   const rtype=document.getElementById('rtype').value;
   const asc=document.getElementById('optAsc').checked;
   const showAmt=document.getElementById('optAmt').checked;
 
-  let cols=buildColumns(all,rtype,STATE.idx);
+  // 当前展示 / 对照
+  const dual=!!(STATE.raw2 && STATE.raw2.length);
+  const useAlt=(dual && STATE.showWhich===2);
+  const curRaw = useAlt? STATE.raw2 : (STATE.raw||[]);
+  const curIdx = useAlt? STATE.idx2 : STATE.idx;
+  const curMeta= useAlt? STATE.meta2 : STATE.meta;
+  const othRaw = dual? (useAlt? STATE.raw : STATE.raw2) : null;
+  const othIdx = dual? (useAlt? STATE.idx : STATE.idx2) : null;
+  const othMeta= dual? (useAlt? STATE.meta : STATE.meta2) : null;
+  if(!curRaw.length){ closeChart(); return; }
+
+  let cols=buildColumns(curRaw,rtype,curIdx);
   cols=cols.filter(c=>{ const y=+c.year; return y>=from && y<=to; });
   if(asc) cols=cols.slice().reverse();
 
@@ -542,13 +564,17 @@ function render(){
     msg.style.display='block'; scroll.style.display='none';
     msg.className='error';
     msg.textContent='「'+MODE_LABEL[rtype]+'」口径在 '+from+'–'+to+' 年没有可用报告期'
-      +(all[0]?'。该标的最新数据为 '+(all[0].REPORT_DATE_NAME||'')+'，请放宽年份范围或换口径。':'。');
+      +(curRaw[0]?'。该标的最新数据为 '+(curRaw[0].REPORT_DATE_NAME||'')+'，请放宽年份范围或换口径。':'。');
     document.getElementById('csv').disabled=true;
     document.getElementById('tsv').disabled=true;
     closeChart();
     return;
   }
   msg.style.display='none'; scroll.style.display='block';
+
+  // 对照序列（不做区间过滤，绘图时按报告期标签对齐）
+  STATE.colsOther = othRaw? buildColumns(othRaw,rtype,othIdx) : null;
+  STATE.cols=cols;
 
   const rows=ROWS.filter(r=> !(r.k==='toi' && !showAmt));
   let html='<thead><tr><th>科目</th>';
@@ -589,13 +615,13 @@ function render(){
   if(!foot){ foot=document.createElement('div'); foot.id='foot'; document.getElementById('scroll').appendChild(foot); }
   foot.textContent='单位：金额亿元，比率为占营业总收入百分比 · '+MODE_LABEL[rtype]+' · 共 '+cols.length+' 个报告期'
     +(cols.some(c=>c.single)?' · 单季值 = 本期累计 − 上期累计':'');
-  STATE.cols=cols;
 
   // 元信息
-  const last=all[0];
+  const last=curRaw[0];
   const mb=document.getElementById('metaBox');
   const nocost=cols.some(c=>c.noCost);
   const upd=(last.UPDATE_DATE||last.NOTICE_DATE||'').slice(0,10);
+  const othName=othMeta? (othMeta.SECURITY_NAME_ABBR||'') : '';
   mb.innerHTML='<div class="meta">'
     +'<span class="name">'+esc(last.SECURITY_NAME_ABBR||'')+'</span>'
     +'<span class="code">'+esc(last.SECUCODE||'')+'</span>'
@@ -603,11 +629,15 @@ function render(){
     +'<span class="kv">本期 <b>'+cols.length+'</b> 个</span>'
     +'<span class="kv">区间 <b>'+cols[0].label+' → '+cols[cols.length-1].label+'</b></span>'
     +'<span class="kv">数据已更新至 <b>'+esc(last.REPORT_DATE_NAME||'—')+'</b></span>'
-    +'<span class="kv">披露日 <b>'+(upd||'—')+'</b></span>'
+    +(dual? '<span class="kv">对照 <b>'+esc(othName)+'</b></span><button class="swap-btn" id="swapBtn">⇄ 切换主副</button>' : '')
     +(nocost?'<span class="pill warn">金融类报表：无营业成本，毛利率不可比</span>':'')
     +(last.CURRENCY&&last.CURRENCY!=='CNY'?'<span class="pill warn">币种 '+esc(last.CURRENCY)+'</span>':'')
     +(cols.some(c=>c.single)?'<span class="pill">单季口径</span>':'')
     +'</div>';
+
+  const sb=document.getElementById('swapBtn');
+  if(sb) sb.onclick=function(){ STATE.showWhich = (STATE.showWhich===1?2:1); render(); };
+
   document.getElementById('csv').disabled=false;
   document.getElementById('tsv').disabled=false;
 
@@ -648,6 +678,28 @@ function drawChart(k){
   const host=document.getElementById('chartBody');
   document.getElementById('chartCard').classList.add('on');
   document.body.classList.add('chart-open');
+
+  // 对照序列：按报告期标签对齐
+  const cols2=STATE.colsOther||null;
+  let vals2=null;
+  if(cols2 && cols2.length){
+    const map={};
+    cols2.forEach(function(c){ const v=c.v[k]; map[c.label]=(v===null||v===undefined||isNaN(v))?null:v; });
+    vals2=cols.map(function(c){ return Object.prototype.hasOwnProperty.call(map,c.label)? map[c.label] : null; });
+  }
+  const has2=!!(vals2 && vals2.some(function(v){ return v!==null; }));
+
+  // 颜色跟随股票本身：用户输入的主标的固定蓝、对比标的固定橙，切换主副时不跳色
+  const useAlt=(STATE.showWhich===2);
+  const mLocal=STATE.meta, mOther=STATE.meta2;
+  const nMain=mLocal? (mLocal.SECURITY_NAME_ABBR||'') : '';
+  const nOther=(has2 && mOther)? (mOther.SECURITY_NAME_ABBR||'') : '';
+  const n1 = useAlt? nOther : nMain;      // 当前序列名称
+  const n2 = useAlt? nMain  : nOther;     // 另一序列名称
+  const C1='#007bff', C2='#f59e0b';
+  const curColor = useAlt? C2 : C1;
+  const othColor = useAlt? C1 : C2;
+
   document.getElementById('chartTitle').textContent=row.n;
   document.getElementById('chartSub').textContent=
     cols[0].label+' → '+cols[cols.length-1].label+' · '+cols.length+' 个报告期';
@@ -656,9 +708,14 @@ function drawChart(k){
   const unit=(row.t==='amt')? '亿元' : (row.t==='pp'? 'pp' : '%');
   document.getElementById('chartTag').textContent=(isAmt?'柱状图 · ':'折线图 · ')+unit;
 
+  const lg=document.getElementById('chartLegend');
+  lg.innerHTML=has2
+    ? ('<span><i style="background:'+C1+'"></i>'+esc(nMain)+'</span><span><i style="background:'+C2+'"></i>'+esc(nOther)+'</span>')
+    : '';
   const vals=cols.map(function(c){ const v=c.v[k]; return (v===null||v===undefined||isNaN(v))?null:v; });
-  const nums=vals.filter(function(v){ return v!==null; });
-  if(!nums.length){
+  let pool=vals.filter(function(v){ return v!==null; });
+  if(has2) pool=pool.concat(vals2.filter(function(v){ return v!==null; }));
+  if(!pool.length){
     host.innerHTML='<div style="padding:34px;text-align:center;color:#8a94a6;font-size:12.5px">该科目在所选区间内没有数据</div>';
     return;
   }
@@ -669,7 +726,7 @@ function drawChart(k){
   const iw=W-padL-padR, ih=H-padT-padB;
 
   // 坐标范围：柱状图必须含 0 基线（柱长代表量级）；折线图只覆盖数据区间（看趋势）
-  let rawMx=Math.max.apply(null, nums), rawMn=Math.min.apply(null, nums);
+  let rawMx=Math.max.apply(null, pool), rawMn=Math.min.apply(null, pool);
   if(isAmt){ rawMn=Math.min(rawMn,0); rawMx=Math.max(rawMx,0); }
   if(rawMx===rawMn){ const d=(Math.abs(rawMx)||1)*0.2; rawMx+=d; rawMn-=d; }
   const rg=(rawMx-rawMn)||1;
@@ -711,34 +768,51 @@ function drawChart(k){
   });
 
   if(isAmt){
-    const bw=Math.max(8, Math.min(86, step*0.5));
+    const gW=Math.min(86, step*0.62);
+    const bW=has2? Math.max(4,(gW-3)/2) : gW;
     cols.forEach(function(c,i){
-      const v=vals[i]; if(v===null) return;
-      const yv=Y(v);
-      const top=Math.min(yv,y0), hgt=Math.max(1, Math.abs(yv-y0));
-      const neg=v<0;
-      g+='<rect x="'+(X(i)-bw/2).toFixed(1)+'" y="'+top.toFixed(1)+'" width="'+bw.toFixed(1)+'" height="'+hgt.toFixed(1)+'" rx="1.5" fill="'+(neg?'#f0a9a5':'#007bff')+'"><title>'+ESC(c.label)+'：'+v.toFixed(2)+' 亿元</title></rect>';
-      if(step>=42){
-        const ly=(v>=0? yv-7 : yv+15);
-        g+='<text x="'+X(i).toFixed(1)+'" y="'+ly.toFixed(1)+'" text-anchor="middle" font-size="10.5" fill="#5b6a82">'+(Math.abs(v)>=100? v.toFixed(0) : v.toFixed(2))+'</text>';
+      const draw=function(v,color,dx,w,label){
+        if(v===null) return;
+        const yv=Y(v);
+        const top=Math.min(yv,y0), hgt=Math.max(1, Math.abs(yv-y0));
+        g+='<rect x="'+dx.toFixed(1)+'" y="'+top.toFixed(1)+'" width="'+w.toFixed(1)+'" height="'+hgt.toFixed(1)+'" rx="1.5" fill="'+color+'"><title>'+ESC(label)+' '+ESC(c.label)+'：'+v.toFixed(2)+' 亿元</title></rect>';
+      };
+      if(has2){
+        draw(vals[i], curColor, X(i)-gW/2, bW, n1);
+        draw(vals2[i], othColor, X(i)-gW/2+bW+3, bW, n2);
+      } else {
+        const v=vals[i];
+        draw(v, (v!==null&&v<0)?'#f0a9a5':curColor, X(i)-bW/2, bW, n1);
+        if(step>=42 && v!==null){
+          const yv=Y(v), ly=(v>=0? yv-7 : yv+15);
+          g+='<text x="'+X(i).toFixed(1)+'" y="'+ly.toFixed(1)+'" text-anchor="middle" font-size="10.5" fill="#5b6a82">'+(Math.abs(v)>=100? v.toFixed(0) : v.toFixed(2))+'</text>';
+        }
       }
     });
   } else {
-    let d='', started=false;
-    vals.forEach(function(v,i){
-      if(v===null){ started=false; return; }
-      d+=(started?'L':'M')+X(i).toFixed(1)+','+Y(v).toFixed(1)+' ';
-      started=true;
-    });
-    g+='<path d="'+d+'" fill="none" stroke="#007bff" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>';
-    vals.forEach(function(v,i){
-      if(v===null) return;
-      g+='<circle cx="'+X(i).toFixed(1)+'" cy="'+Y(v).toFixed(1)+'" r="3.6" fill="#fff" stroke="'+(v<0?'#dc3545':'#007bff')+'" stroke-width="1.8"><title>'+ESC(cols[i].label)+'：'+v.toFixed(2)+' '+unit+'</title></circle>';
-      if(step>=46){
+    const line=function(series,color,name){
+      let d='', started=false;
+      series.forEach(function(v,i){
+        if(v===null){ started=false; return; }
+        d+=(started?'L':'M')+X(i).toFixed(1)+','+Y(v).toFixed(1)+' ';
+        started=true;
+      });
+      if(!d) return;
+      g+='<path d="'+d+'" fill="none" stroke="'+color+'" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>';
+      series.forEach(function(v,i){
+        if(v===null) return;
+        g+='<circle cx="'+X(i).toFixed(1)+'" cy="'+Y(v).toFixed(1)+'" r="3.4" fill="#fff" stroke="'+(has2?color:(v<0?'#dc3545':color))+'" stroke-width="1.8"><title>'+ESC(name)+' '+ESC(cols[i].label)+'：'+v.toFixed(2)+' '+unit+'</title></circle>';
+      });
+    };
+    if(has2) line(vals2, othColor, n2);
+    line(vals, curColor, n1);
+    if(!has2 && step>=46){
+      vals.forEach(function(v,i){
+        if(v===null) return;
         const ly=(v>=0? Y(v)-9 : Y(v)+16);
         g+='<text x="'+X(i).toFixed(1)+'" y="'+ly.toFixed(1)+'" text-anchor="middle" font-size="10.5" fill="#5b6a82">'+v.toFixed(2)+'</text>';
-      }
-    });
+      });
+    }
   }
 
   host.innerHTML='<svg width="'+W+'" height="'+H+'" viewBox="0 0 '+W+' '+H+'" xmlns="http://www.w3.org/2000/svg">'+g+'</svg>';
@@ -759,46 +833,74 @@ window.addEventListener('resize',function(){
 
 
 /* ============ 提取 ============ */
+async function resolveCode(raw, sug){
+  const nc=normCode(raw);
+  if(nc) return {code:nc};
+  const list=await suggest(raw);
+  if(!list.length) return {err:'没找到「'+raw+'」对应的 A 股，请检查名称，或直接用 6 位代码。'};
+  if(list.length>1){ sug.paint(list); return {multi:list.length}; }
+  const one=normCode(list[0].Code);
+  if(!one) return {err:'无法识别「'+raw+'」的代码。'};
+  return {code:one, picked:one.code};
+}
+
 async function load(input,opt){
   opt=opt||{};
   const btn=document.getElementById('go');
   const msg=document.getElementById('msg'), scroll=document.getElementById('scroll');
   const raw=String(input||'').trim();
+  const altRaw=codeEl2.value.trim();
   btn.disabled=true; btn.textContent='提取中…';
   scroll.style.display='none'; msg.style.display='block'; msg.className='';
-  let nc=normCode(raw);
   try{
-    if(!nc){
-      if(!raw) throw new Error('请输入 6 位 A 股代码或公司名称。');
-      msg.textContent='正在识别「'+raw+'」…';
-      const list=await suggest(raw);
-      if(!list.length) throw new Error('没找到「'+raw+'」对应的 A 股，请检查名称，或直接用 6 位代码。');
-      if(list.length>1){
-        renderSug(list);
+    if(!raw) throw new Error('请输入 6 位 A 股代码或公司名称。');
+
+    msg.textContent='正在识别标的…';
+    const r1=await resolveCode(raw, sugMain);
+    if(r1.err) throw new Error(r1.err);
+    if(r1.multi){ msg.className='error'; msg.textContent='「'+raw+'」匹配到 '+r1.multi+' 只标的，请在下方列表中点选。'; return; }
+    const nc=r1.code;
+    if(r1.picked) codeEl.value=r1.picked;
+
+    // 对比标的（可选）
+    let nc2=null;
+    if(altRaw){
+      const r2=await resolveCode(altRaw, sugAlt);
+      if(r2.err) throw new Error(r2.err.replace('对应的 A 股','对应的对比标的'));
+      if(r2.multi){
+        codeEl2.focus();
         msg.className='error';
-        msg.textContent='「'+raw+'」匹配到 '+list.length+' 只标的，请在下方列表中点选。';
+        msg.textContent='对比标的「'+altRaw+'」匹配到 '+r2.multi+' 只，请在下方列表中点选。';
         return;
       }
-      nc=normCode(list[0].Code);
-      if(!nc) throw new Error('无法识别「'+raw+'」的代码。');
-      document.getElementById('code').value=nc.code;
+      nc2=r2.code;
+      if(r2.picked) codeEl2.value=r2.picked;
+      if(nc2.secucode===nc.secucode) throw new Error('主标的与对比标的是同一只，请换一只或清空对比框。');
     }
 
-    msg.textContent='正在拉取 '+nc.secucode+' 的利润表数据…';
-    const data=await fetchAll(nc.secucode);
+    msg.textContent='正在拉取 '+(nc2? nc.secucode+' 与 '+nc2.secucode : nc.secucode)+' 的利润表数据…';
+    const pack=await Promise.all([fetchAll(nc.secucode), nc2? fetchAll(nc2.secucode).catch(function(){ return []; }) : Promise.resolve(null)]);
+    const data=pack[0], data2=pack[1];
     if(!data.length) throw new Error('未找到该标的的利润表数据，请确认代码是否正确（当前仅支持 A 股）。');
+    if(nc2 && (!data2 || !data2.length)) throw new Error('对比标的没有取到利润表数据，请确认代码。');
 
-    // 报告期索引：年-季度 → 原始记录（用于单季拆分）
-    const idx={};
-    data.forEach(r=>{ const q=quarterOf(r); if(q>0) idx[(r.REPORT_DATE||'').slice(0,4)+'-'+q]=r; });
-    STATE.raw=data; STATE.idx=idx; STATE.meta=data[0];
+    const mkIdx=function(arr){
+      const o={};
+      arr.forEach(function(r){ const q=quarterOf(r); if(q>0) o[(r.REPORT_DATE||'').slice(0,4)+'-'+q]=r; });
+      return o;
+    };
+    STATE.raw=data; STATE.idx=mkIdx(data); STATE.meta=data[0];
+    STATE.raw2=(data2&&data2.length)? data2 : null;
+    STATE.idx2=STATE.raw2? mkIdx(STATE.raw2) : null;
+    STATE.meta2=STATE.raw2? STATE.raw2[0] : null;
+    STATE.showWhich=1;
 
-    // 年份范围按该标的实际披露的全部报告期生成，不设上限
-    const years=[...new Set(data.map(r=>+((r.REPORT_DATE||'').slice(0,4))))]
-                  .filter(y=>y>1990).sort((a,b)=>a-b);
+    const years=[...new Set(data.map(function(r){ return +((r.REPORT_DATE||'').slice(0,4)); }))]
+                  .filter(function(y){ return y>1990; }).sort(function(a,b){ return a-b; });
     if(!years.length) throw new Error('该标的没有可用报告期。');
     fillYears(years,opt.keep,opt.range);
     render();
+
     const org=data[0].ORG_TYPE;
     document.getElementById('hint').textContent=(org&&org!=='通用')
       ? ('报表类型：'+org+' · 数据至 '+(data[0].REPORT_DATE_NAME||''))
@@ -810,7 +912,7 @@ async function load(input,opt){
     btn.disabled=false; btn.textContent='提取';
   }
 }
-function run(){ load(document.getElementById('code').value,{keep:true}); }
+function run(){ load(codeEl.value,{keep:true}); }
 function fillYears(years,keep,range){
   const f=document.getElementById('from'), t=document.getElementById('to');
   const pf=+f.value, pt=+t.value;
@@ -865,45 +967,59 @@ document.getElementById('tsv').onclick=function(){
 };
 
 /* ============ 搜索建议 ============ */
-const codeEl=document.getElementById('code'), sugEl=document.getElementById('sug');
-let sugTimer=null, sugItems=[], sugIdx=-1;
+const codeEl=document.getElementById('code');
+const codeEl2=document.getElementById('code2');
 
-function renderSug(list){
-  sugItems=list.slice(0,12); sugIdx=-1;
-  if(!sugItems.length){ sugEl.classList.remove('on'); return; }
-  sugEl.innerHTML=sugItems.map((x,i)=>'<div data-i="'+i+'"><span class="c">'+esc(x.Code)+'</span><span>'+esc(x.Name)+'</span><span class="m">'+esc(x.SecurityTypeName||'')+'</span></div>').join('');
-  sugEl.classList.add('on');
-  [...sugEl.children].forEach(el=>{
-    el.onclick=function(){
-      const it=sugItems[+el.dataset.i];
-      codeEl.value=it.Code;
-      sugEl.classList.remove('on');
-      load(it.Code,{keep:true});
-    };
+// 给任意输入框绑定联想下拉，返回 {paint} 供程序化调用
+function makeSug(inputEl, sugEl, onPick, onEnter){
+  let timer=null, items=[], idx=-1;
+  function hide(){ sugEl.classList.remove('on'); }
+  function paint(list){
+    items=list.slice(0,12); idx=-1;
+    if(!items.length){ hide(); return; }
+    sugEl.innerHTML=items.map(function(x,i){
+      return '<div data-i="'+i+'"><span class="c">'+esc(x.Code)+'</span><span>'+esc(x.Name)+'</span><span class="m">'+esc(x.SecurityTypeName||'')+'</span></div>';
+    }).join('');
+    sugEl.classList.add('on');
+    Array.prototype.forEach.call(sugEl.children,function(el){
+      el.onclick=function(){
+        const it=items[+el.dataset.i];
+        inputEl.value=it.Code;
+        hide();
+        onPick(it);
+      };
+    });
+  }
+  inputEl.addEventListener('input',function(){
+    const q=inputEl.value.trim();
+    clearTimeout(timer);
+    if(q.length<2 || /^\d{6}$/.test(q)){ hide(); return; }
+    timer=setTimeout(async function(){
+      try{ paint(await suggest(q)); }catch(e){ hide(); }
+    },260);
   });
+  inputEl.addEventListener('keydown',function(e){
+    if(e.key==='Enter' && !sugEl.classList.contains('on')){ onEnter(); return; }
+    if(!sugEl.classList.contains('on')) return;
+    const n=sugEl.children.length;
+    if(e.key==='ArrowDown'){ e.preventDefault(); idx=Math.min(idx+1,n-1); }
+    else if(e.key==='ArrowUp'){ e.preventDefault(); idx=Math.max(idx-1,0); }
+    else if(e.key==='Enter'){ e.preventDefault(); if(idx>=0){ sugEl.children[idx].click(); } else { hide(); onEnter(); } return; }
+    else if(e.key==='Escape'){ hide(); return; }
+    else return;
+    Array.prototype.forEach.call(sugEl.children,function(el,i){ el.classList.toggle('sel',i===idx); });
+  });
+  return {paint:paint, hide:hide};
 }
 
-codeEl.addEventListener('input',function(){
-  const q=codeEl.value.trim();
-  clearTimeout(sugTimer);
-  if(q.length<2 || /^\d{6}$/.test(q)){ sugEl.classList.remove('on'); return; }
-  sugTimer=setTimeout(async function(){
-    try{ renderSug(await suggest(q)); }
-    catch(e){ sugEl.classList.remove('on'); }
-  },260);
+const sugMain=makeSug(codeEl, document.getElementById('sug'), function(){ load(codeEl.value,{keep:true}); }, function(){ run(); });
+const sugAlt =makeSug(codeEl2, document.getElementById('sug2'), function(){ load(codeEl.value,{keep:true}); }, function(){ run(); });
+
+document.addEventListener('click',function(e){
+  if(!e.target.closest('.field')){
+    sugMain.hide(); sugAlt.hide();
+  }
 });
-codeEl.addEventListener('keydown',function(e){
-  if(e.key==='Enter' && !sugEl.classList.contains('on')){ run(); return; }
-  if(!sugEl.classList.contains('on')) return;
-  const n=sugEl.children.length;
-  if(e.key==='ArrowDown'){ e.preventDefault(); sugIdx=Math.min(sugIdx+1,n-1); }
-  else if(e.key==='ArrowUp'){ e.preventDefault(); sugIdx=Math.max(sugIdx-1,0); }
-  else if(e.key==='Enter'){ e.preventDefault(); if(sugIdx>=0){ sugEl.children[sugIdx].click(); } else { sugEl.classList.remove('on'); run(); } return; }
-  else if(e.key==='Escape'){ sugEl.classList.remove('on'); return; }
-  else return;
-  [...sugEl.children].forEach((el,i)=>el.classList.toggle('sel',i===sugIdx));
-});
-document.addEventListener('click',function(e){ if(!e.target.closest('.field')) sugEl.classList.remove('on'); });
 
 /* ============ 交互 ============ */
 document.getElementById('go').onclick=run;
@@ -925,12 +1041,16 @@ function syncURL(code){
   const p=new URLSearchParams({code:code, from:from, to:to});
   const rt=document.getElementById('rtype').value;
   if(rt && rt!=='A') p.set('rtype',rt);
+  const c2=codeEl2.value.trim();
+  if(c2) p.set('code2',c2);
   history.replaceState(null,'','?'+p.toString());
 }
 (function init(){
   const q=new URLSearchParams(location.search);
   const code=q.get('code')||'600519';
   codeEl.value=code;
+  const code2=q.get('code2');
+  if(code2) codeEl2.value=code2;
   const rt=q.get('rtype');
   if(rt && document.querySelector('#rtype option[value="'+rt+'"]')) document.getElementById('rtype').value=rt;
   const range=(q.get('from')&&q.get('to'))?[q.get('from'),q.get('to')]:null;
