@@ -42,6 +42,7 @@ a:hover{text-decoration:underline}
 .input:focus,select:focus{border-color:var(--blue);box-shadow:0 0 0 3px rgba(0,123,255,.12)}
 #code{width:190px;font-family:var(--mono);letter-spacing:.5px}
 select{min-width:96px;cursor:pointer}
+#rtype{min-width:170px}
 .tilde{color:var(--txt3);padding-bottom:9px;font-size:12px}
 .btn{
   height:34px;padding:0 18px;border:0;border-radius:6px;background:var(--blue);color:#fff;
@@ -59,9 +60,10 @@ select{min-width:96px;cursor:pointer}
 /* 搜索建议 */
 .sug{
   position:absolute;top:100%;left:0;margin-top:4px;width:340px;max-height:300px;overflow:auto;
-  background:#fff;border:1px solid var(--line2);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.12);
-  z-index:50;display:none;
+  background:#fff;border:1px solid var(--line2);border-radius:8px;box-shadow:0 12px 28px rgba(0,0,0,.16);
+  z-index:999;display:none;isolation:isolate;
 }
+.sug div{background:#fff}
 .sug.on{display:block}
 .sug div{padding:8px 12px;cursor:pointer;font-size:12.5px;display:flex;gap:8px;align-items:baseline}
 .sug div:hover,.sug div.sel{background:var(--blue-l)}
@@ -151,7 +153,7 @@ tfoot td{padding:8px 10px;font-size:11.5px;color:var(--txt3);background:#fcfcfd;
 <div class="hd">
   <div>
     <h1>财务分析模型</h1>
-    <div class="sub">输入代码 → 选年份区间 → 提取利润表科目 · 数据源：东方财富 F10 年报</div>
+    <div class="sub">输入代码或名称 → 选年份区间与报告期口径 → 提取利润表科目 · 数据源：东方财富 F10</div>
   </div>
   <div class="sub" id="srcTag"></div>
 </div>
@@ -175,8 +177,18 @@ tfoot td{padding:8px 10px;font-size:11.5px;color:var(--txt3);background:#fcfcfd;
     <div class="field">
       <label>报告期</label>
       <select id="rtype">
-        <option value="A">仅年报</option>
-        <option value="ALL">全部报告期</option>
+        <optgroup label="累计口径">
+          <option value="A">仅年报</option>
+          <option value="ALL">全部报告期</option>
+          <option value="Q1">一季报</option>
+          <option value="H1">半年报</option>
+          <option value="Q3C">三季报</option>
+        </optgroup>
+        <optgroup label="单季口径">
+          <option value="Q2">Q2（半年报−一季报）</option>
+          <option value="Q3">Q3（三季报−半年报）</option>
+          <option value="Q4">Q4（年报−三季报）</option>
+        </optgroup>
       </select>
     </div>
     <div class="field">
@@ -218,6 +230,7 @@ tfoot td{padding:8px 10px;font-size:11.5px;color:var(--txt3);background:#fcfcfd;
     <li class="warnline">「口径差额」= 模型净利率 − 报表净利润率。差额主要来自税金及附加、其他业务成本、利息支出等未进模型的科目；差额为 0 表示模型完全闭合。勾选「税金及附加计入经营成本」可验证差额是否主要由该项解释。</li>
     <li>减值为负值（损失）时以负号计入；缺失数据按 0 计入加总。银行、保险、券商无「营业成本」科目，毛利率与经营性利润率不可比，显示为「—」，不适用科目同样显示「—」。</li>
     <li class="warnline">跨 2018 年年报比较需注意：新准则下研发费用自 2018 年起在利润表单列，此前计入管理费用。因此 2017 年及更早的「研发费用率」为 0、「管理费用率」已包含研发支出，两段口径不可直接对比。</li>
+    <li class="warnline">单季口径为「本期累计 − 上一报告期累计」，所有比率用单季金额重新计算，收入 YoY 也换成单季同比。2002 年以前多数公司只披露年报与中报（一季报自 2002 年起强制披露、三季报更晚），因此 Q2 及 Q3、Q4 单季在早期无法拆分，该期会从表中略去而非显示为 0。</li>
   </ol>
 </div>
 
@@ -228,21 +241,27 @@ const API='https://datacenter-web.eastmoney.com/api/data/v1/get';
 const SUG='https://searchapi.eastmoney.com/api/suggest/get';
 const SUG_TOKEN='D43BF722C8E33BDC906FB84D85E326E8';
 const NOW=new Date().getFullYear();
-let STATE={rows:null,meta:null,cols:null};
+let STATE={raw:null,idx:null,meta:null,cols:null};
 
 /* ============ JSONP ============ */
 let seq=0;
-function jsonp(url,timeout){
+function jsonp(url,timeout,cbParam){
   timeout=timeout||18000;
+  cbParam=cbParam||'callback';
   return new Promise(function(resolve,reject){
     const name='__cb'+(Date.now().toString(36))+(seq++);
     const s=document.createElement('script');
     let done=false;
     function clean(){ try{delete window[name];}catch(e){window[name]=undefined;} if(s.parentNode)s.parentNode.removeChild(s); }
-    const timer=setTimeout(function(){ if(done)return; done=true; clean(); reject(new Error('请求超时')); },timeout);
+    function fail(msg){
+      if(done) return; done=true; clearTimeout(timer); clean();
+      reject(new Error(msg));
+    }
+    const timer=setTimeout(function(){ fail('请求超时'); },timeout);
     window[name]=function(d){ if(done)return; done=true; clearTimeout(timer); clean(); resolve(d); };
-    s.onerror=function(){ if(done)return; done=true; clearTimeout(timer); clean(); reject(new Error('网络请求失败')); };
-    s.src=url+(url.indexOf('?')>=0?'&':'?')+'callback='+name;
+    s.onerror=function(){ fail('网络请求失败'); };
+    s.onload=function(){ setTimeout(function(){ fail('接口返回格式异常'); },1200); };
+    s.src=url+(url.indexOf('?')>=0?'&':'?')+cbParam+'='+name;
     document.head.appendChild(s);
   });
 }
@@ -285,70 +304,104 @@ async function fetchAll(secucode){
   return j.result.data;
 }
 async function suggest(q){
-  const url=SUG+'?input='+encodeURIComponent(q)+'&type=14&token='+SUG_TOKEN+'&count=10&cb=';
-  const j=await jsonp(url).catch(()=>null);
+  const url=SUG+'?input='+encodeURIComponent(q)+'&type=14&token='+SUG_TOKEN+'&count=12';
+  const j=await jsonp(url,15000,'cb').catch(()=>null);
   const arr=(j&&j.QuotationCodeTable&&j.QuotationCodeTable.Data)||[];
-  return arr.filter(x=>x.Classify==='AStock');
+  // 只保留 A 股，且代码为 6 位数字（排除板块、债券、港股等）
+  return arr.filter(x=>x.Classify==='AStock' && /^\d{6}$/.test(x.Code||''));
 }
 
 /* ============ 建模 ============ */
-function buildRows(rec){
-  const TOI=num(rec.TOTAL_OPERATE_INCOME);
-  const OPINC=num(rec.OPERATE_INCOME);
-  const COST=num(rec.OPERATE_COST);
-  const TAXADD=num(rec.OPERATE_TAX_ADD)||0;
-  const SALE=num(rec.SALE_EXPENSE)||0;
-  const MANAGE=num(rec.MANAGE_EXPENSE)||0;
-  const RND=(num(rec.RESEARCH_EXPENSE)!==null?num(rec.RESEARCH_EXPENSE):(num(rec.ME_RESEARCH_EXPENSE)||0))||0;
-  const FIN=num(rec.FINANCE_EXPENSE)||0;
-  const OTHINC=num(rec.OTHER_INCOME)||0;
-  const INV=num(rec.INVEST_INCOME)||0;
-  const FV=num(rec.FAIRVALUE_CHANGE_INCOME)||0;
-  const AIMP=num(rec.ASSET_IMPAIRMENT_INCOME)||0;
-  const CIMP=num(rec.CREDIT_IMPAIRMENT_INCOME)||0;
-  const ADISP=num(rec.ASSET_DISPOSAL_INCOME)||0;
-  const NBIN=num(rec.NONBUSINESS_INCOME)||0;
-  const NBEX=num(rec.NONBUSINESS_EXPENSE)||0;
-  const TAX=num(rec.INCOME_TAX)||0;
-  const NETP=num(rec.NETPROFIT);
-  const MIN=num(rec.MINORITY_INTEREST)||0;
-  const PARENT=num(rec.PARENT_NETPROFIT);
+// 参与建模的利润表金额字段
+const AMT_FIELDS=['TOTAL_OPERATE_INCOME','OPERATE_INCOME','OPERATE_COST','OPERATE_TAX_ADD',
+  'SALE_EXPENSE','MANAGE_EXPENSE','RESEARCH_EXPENSE','ME_RESEARCH_EXPENSE','FINANCE_EXPENSE',
+  'OTHER_INCOME','INVEST_INCOME','FAIRVALUE_CHANGE_INCOME','ASSET_IMPAIRMENT_INCOME',
+  'CREDIT_IMPAIRMENT_INCOME','ASSET_DISPOSAL_INCOME','NONBUSINESS_INCOME','NONBUSINESS_EXPENSE',
+  'INCOME_TAX','NETPROFIT','MINORITY_INTEREST','PARENT_NETPROFIT','OPERATE_PROFIT',
+  'TOTAL_OPERATE_INCOME_YOY'];
+
+const MODE_LABEL={A:'年报',ALL:'全部报告期（累计）',Q1:'一季报',H1:'半年报',Q3C:'三季报',
+                  Q2:'Q2 单季',Q3:'Q3 单季',Q4:'Q4 单季'};
+
+function pickAmts(rec){ const o={}; for(const k of AMT_FIELDS) o[k]=num(rec[k]); return o; }
+
+// 报告期季度序号：3月=1、6月=2、9月=3、12月=4
+function quarterOf(rec){
+  const m=(rec.REPORT_DATE||'').slice(5,7);
+  return m==='03'?1 : m==='06'?2 : m==='09'?3 : m==='12'?4 : 0;
+}
+const PREV_Q={2:1,3:2,4:3};
+
+// 单季金额 = 本期累计 − 同期上一报告期累计
+function singleAmts(rec,idx){
+  const y=(rec.REPORT_DATE||'').slice(0,4), q=quarterOf(rec);
+  if(q===1) return {amt:pickAmts(rec),ok:true};
+  const prev=idx[y+'-'+(PREV_Q[q]||0)];
+  if(!prev) return {amt:null,ok:false};
+  const a=pickAmts(rec), b=pickAmts(prev), o={};
+  for(const k of AMT_FIELDS){
+    o[k]=(a[k]===null && b[k]===null)? null : ((a[k]||0)-(b[k]||0));
+  }
+  return {amt:o,ok:true};
+}
+
+function buildRows(rec,amt,opt){
+  opt=opt||{};
+  amt=amt||pickAmts(rec);
+  const TOI=amt.TOTAL_OPERATE_INCOME;
+  const COST=amt.OPERATE_COST;
+  const TAXADD=amt.OPERATE_TAX_ADD||0;
+  const SALE=amt.SALE_EXPENSE||0;
+  const MANAGE=amt.MANAGE_EXPENSE||0;
+  const RND=(amt.RESEARCH_EXPENSE!==null?amt.RESEARCH_EXPENSE:(amt.ME_RESEARCH_EXPENSE||0))||0;
+  const FIN=amt.FINANCE_EXPENSE||0;
+  const OTHINC=amt.OTHER_INCOME||0;
+  const INV=amt.INVEST_INCOME||0;
+  const FV=amt.FAIRVALUE_CHANGE_INCOME||0;
+  const AIMP=amt.ASSET_IMPAIRMENT_INCOME||0;
+  const CIMP=amt.CREDIT_IMPAIRMENT_INCOME||0;
+  const ADISP=amt.ASSET_DISPOSAL_INCOME||0;
+  const NBIN=amt.NONBUSINESS_INCOME||0;
+  const NBEX=amt.NONBUSINESS_EXPENSE||0;
+  const TAX=amt.INCOME_TAX||0;
+  const NETP=amt.NETPROFIT;
+  const MIN=amt.MINORITY_INTEREST||0;
 
   const gen = ((rec.ORG_TYPE||'通用')==='通用');
   // 通用企业：缺失科目按 0 计；金融类：缺失科目视为不适用，显示 —
   const rateOf = raw => (raw!==null) ? pct(raw,TOI) : (gen?0:null);
   const noCost = (COST===null);
   const gm = noCost? null : pct(TOI-COST,TOI);
-  const taxAddR = rateOf(num(rec.OPERATE_TAX_ADD));
-  const saleR=rateOf(num(rec.SALE_EXPENSE)), manR=rateOf(num(rec.MANAGE_EXPENSE)),
-        rndR=rateOf(num(rec.RESEARCH_EXPENSE)!==null?num(rec.RESEARCH_EXPENSE):num(rec.ME_RESEARCH_EXPENSE)),
-        finR=rateOf(num(rec.FINANCE_EXPENSE));
+  const taxAddR = rateOf(amt.OPERATE_TAX_ADD);
+  const saleR=rateOf(amt.SALE_EXPENSE), manR=rateOf(amt.MANAGE_EXPENSE),
+        rndR=rateOf(amt.RESEARCH_EXPENSE!==null?amt.RESEARCH_EXPENSE:amt.ME_RESEARCH_EXPENSE),
+        finR=rateOf(amt.FINANCE_EXPENSE);
   const expR = (TOI? (SALE+MANAGE+RND+FIN)/TOI*100 : null);
   const useTax = document.getElementById('optTax').checked;
-  const opMargin = (gm===null)? null : gm - expR - (useTax?taxAddR:0);
+  const opMargin = (gm===null)? null : gm - expR - (useTax?(taxAddR||0):0);
 
-  const othR=rateOf(num(rec.OTHER_INCOME)), invR=rateOf(num(rec.INVEST_INCOME)),
-        fvR=rateOf(num(rec.FAIRVALUE_CHANGE_INCOME)), aimpR=rateOf(num(rec.ASSET_IMPAIRMENT_INCOME)),
-        cimpR=rateOf(num(rec.CREDIT_IMPAIRMENT_INCOME)), adispR=rateOf(num(rec.ASSET_DISPOSAL_INCOME));
+  const othR=rateOf(amt.OTHER_INCOME), invR=rateOf(amt.INVEST_INCOME),
+        fvR=rateOf(amt.FAIRVALUE_CHANGE_INCOME), aimpR=rateOf(amt.ASSET_IMPAIRMENT_INCOME),
+        cimpR=rateOf(amt.CREDIT_IMPAIRMENT_INCOME), adispR=rateOf(amt.ASSET_DISPOSAL_INCOME);
   const nonOp = [pct(OTHINC,TOI),pct(INV,TOI),pct(FV,TOI),pct(AIMP,TOI),pct(CIMP,TOI),pct(ADISP,TOI)]
                 .reduce((a,b)=>a+(b||0),0);
   const opProfit = (opMargin===null)? null : opMargin+nonOp;
-  const nbinR=rateOf(num(rec.NONBUSINESS_INCOME)), nbexR=rateOf(num(rec.NONBUSINESS_EXPENSE));
+  const nbinR=rateOf(amt.NONBUSINESS_INCOME), nbexR=rateOf(amt.NONBUSINESS_EXPENSE);
   const nonRec = (pct(NBIN,TOI)||0)-(pct(NBEX,TOI)||0);
-  const taxR=rateOf(num(rec.INCOME_TAX));
+  const taxR=rateOf(amt.INCOME_TAX);
   const netR=(opProfit===null)? null : opProfit+nonRec-taxR;
-  const minR=rateOf(num(rec.MINORITY_INTEREST));
+  const minR=rateOf(amt.MINORITY_INTEREST);
   const parentR=(netR===null)? null : netR-minR;
   const netRep=pct(NETP,TOI);
-  const opRep=pct(rec.OPERATE_PROFIT,TOI);
+  const opRep=pct(amt.OPERATE_PROFIT,TOI);
   const gap=(netR===null||netRep===null)? null : netR-netRep;
 
   return {
-    label:periodLabel(rec), year:(rec.REPORT_DATE||'').slice(0,4),
-    raw:rec,
+    label:opt.label||periodLabel(rec), year:(rec.REPORT_DATE||'').slice(0,4),
+    raw:rec, single:!!opt.single,
     v:{
       toi:TOI===null?null:TOI/1e8,
-      yoy:num(rec.TOTAL_OPERATE_INCOME_YOY),
+      yoy:('yoy' in opt)? opt.yoy : amt.TOTAL_OPERATE_INCOME_YOY,
       gm:gm, taxAdd:taxAddR, sale:saleR, manage:manR, rnd:rndR, fin:finR, exp:expR,
       opMargin:opMargin, oth:othR, inv:invR, fv:fvR, aimp:aimpR, cimp:cimpR, adisp:adispR,
       nonOp:nonOp, opProfit:opProfit, nbin:nbinR, nbex:nbexR, nonRec:nonRec,
@@ -356,6 +409,42 @@ function buildRows(rec){
     },
     noCost:noCost
   };
+}
+
+// 按报告期口径生成列（降序，与接口一致）
+function buildColumns(all,mode,idx){
+  const out=[];
+  const wantQ={'Q1':1,'H1':2,'Q3C':3,'Q2':2,'Q3':3,'Q4':4}[mode];
+  const isSingle=(mode==='Q2'||mode==='Q3'||mode==='Q4');
+  for(const rec of all){
+    const y=(rec.REPORT_DATE||'').slice(0,4), q=quarterOf(rec);
+    if(q<1) continue;
+    if(mode==='A'){
+      if(q===4) out.push(buildRows(rec,pickAmts(rec),{label:y+'A'}));
+      continue;
+    }
+    if(mode==='ALL'){
+      out.push(buildRows(rec,pickAmts(rec),{label:periodLabel(rec)}));
+      continue;
+    }
+    if(!isSingle){
+      if(q!==wantQ) continue;
+      out.push(buildRows(rec,pickAmts(rec),{label:y+(q===1?'Q1':q===2?'H1':'Q3')}));
+      continue;
+    }
+    if(q!==wantQ) continue;
+    const sq=singleAmts(rec,idx);
+    if(!sq.ok) continue;                       // 缺上一期累计，无法拆分
+    let yoy=null;
+    const prevYear=idx[(+y-1)+'-'+q];
+    if(prevYear){
+      const ps=singleAmts(prevYear,idx);
+      const a=sq.amt.TOTAL_OPERATE_INCOME, b=ps.ok?ps.amt.TOTAL_OPERATE_INCOME:null;
+      if(a!==null && b) yoy=(a/b-1)*100;
+    }
+    out.push(buildRows(rec,sq.amt,{label:y+'Q'+q,yoy:yoy,single:true}));
+  }
+  return out;
 }
 
 /* 行定义：k=字段, t=类型(amt/pct), c=着色(1=yoy红涨绿跌), ind=缩进, note=备注 */
@@ -405,21 +494,23 @@ const ROWS=[
 
 /* ============ 渲染 ============ */
 function render(){
-  const all=STATE.rows, meta=STATE.meta;
+  const all=STATE.raw||[];
   const from=+document.getElementById('from').value;
   const to=+document.getElementById('to').value;
   const rtype=document.getElementById('rtype').value;
   const asc=document.getElementById('optAsc').checked;
   const showAmt=document.getElementById('optAmt').checked;
 
-  let cols=all.filter(r=> rtype==='ALL'? true : r.raw.REPORT_TYPE==='年报');
-  cols=cols.filter(r=>{ const y=+r.year; return y>=from && y<=to; });
+  let cols=buildColumns(all,rtype,STATE.idx);
+  cols=cols.filter(c=>{ const y=+c.year; return y>=from && y<=to; });
   if(asc) cols=cols.slice().reverse();
 
   const msg=document.getElementById('msg'), scroll=document.getElementById('scroll');
   if(!cols.length){
     msg.style.display='block'; scroll.style.display='none';
-    msg.className='error'; msg.textContent='所选区间内没有可用报告期，请放宽年份范围或切换报告期类型。';
+    msg.className='error';
+    msg.textContent='「'+MODE_LABEL[rtype]+'」口径在 '+from+'–'+to+' 年没有可用报告期'
+      +(all[0]?'。该标的最新数据为 '+(all[0].REPORT_DATE_NAME||'')+'，请放宽年份范围或换口径。':'。');
     document.getElementById('csv').disabled=true;
     document.getElementById('tsv').disabled=true;
     return;
@@ -449,11 +540,11 @@ function render(){
       if(v===null||v===undefined||isNaN(v)){
         html+='<td class="na">—</td>'; return;
       }
-      let s = (r.t==='amt')? v.toFixed(2) : (r.t==='pp'? z(v).toFixed(2) : z(v).toFixed(2)+'%');
+      let t = (r.t==='amt')? v.toFixed(2) : (r.t==='pp'? z(v).toFixed(2) : z(v).toFixed(2)+'%');
       let k='';
       if(r.c===1){ k = v>0?'up':(v<0?'down':''); }
       else if(i===maxIdx){ k='max'; }
-      html+='<td'+(k?' class="'+k+'"':'')+'>'+s+'</td>';
+      html+='<td'+(k?' class="'+k+'"':'')+'>'+t+'</td>';
     });
     html+='</tr>';
   });
@@ -463,50 +554,77 @@ function render(){
   tbl.innerHTML=html;
   let foot=document.getElementById('foot');
   if(!foot){ foot=document.createElement('div'); foot.id='foot'; document.getElementById('scroll').appendChild(foot); }
-  foot.textContent='单位：金额亿元，比率为占营业总收入百分比 · 共 '+cols.length+' 个报告期';
+  foot.textContent='单位：金额亿元，比率为占营业总收入百分比 · '+MODE_LABEL[rtype]+' · 共 '+cols.length+' 个报告期'
+    +(cols.some(c=>c.single)?' · 单季值 = 本期累计 − 上期累计':'');
+  STATE.cols=cols;
 
   // 元信息
-  const last=all[0].raw;
+  const last=all[0];
   const mb=document.getElementById('metaBox');
   const nocost=cols.some(c=>c.noCost);
   const upd=(last.UPDATE_DATE||last.NOTICE_DATE||'').slice(0,10);
   mb.innerHTML='<div class="meta">'
     +'<span class="name">'+esc(last.SECURITY_NAME_ABBR||'')+'</span>'
     +'<span class="code">'+esc(last.SECUCODE||'')+'</span>'
-    +'<span class="kv">报告期 <b>'+cols.length+'</b> 个</span>'
+    +'<span class="kv">口径 <b>'+MODE_LABEL[rtype]+'</b></span>'
+    +'<span class="kv">本期 <b>'+cols.length+'</b> 个</span>'
     +'<span class="kv">区间 <b>'+cols[0].label+' → '+cols[cols.length-1].label+'</b></span>'
-    +'<span class="kv">最近披露 <b>'+(upd||'—')+'</b></span>'
+    +'<span class="kv">数据已更新至 <b>'+esc(last.REPORT_DATE_NAME||'—')+'</b></span>'
+    +'<span class="kv">披露日 <b>'+(upd||'—')+'</b></span>'
     +(nocost?'<span class="pill warn">金融类报表：无营业成本，毛利率不可比</span>':'')
     +(last.CURRENCY&&last.CURRENCY!=='CNY'?'<span class="pill warn">币种 '+esc(last.CURRENCY)+'</span>':'')
+    +(cols.some(c=>c.single)?'<span class="pill">单季口径</span>':'')
     +'</div>';
   document.getElementById('csv').disabled=false;
   document.getElementById('tsv').disabled=false;
-  STATE.cols=cols;
 }
 const esc=s=>String(s).replace(/[&<>"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));
 
 /* ============ 提取 ============ */
-async function load(code,opt){
+async function load(input,opt){
   opt=opt||{};
   const btn=document.getElementById('go');
   const msg=document.getElementById('msg'), scroll=document.getElementById('scroll');
-  const nc=normCode(code);
-  if(!nc){ showErr('请输入 6 位 A 股代码（如 600519），沪市 6 开头、深市 0/3 开头、北交所 4/8 开头。'); return; }
-
+  const raw=String(input||'').trim();
   btn.disabled=true; btn.textContent='提取中…';
   scroll.style.display='none'; msg.style.display='block'; msg.className='';
-  msg.textContent='正在拉取 '+nc.secucode+' 的利润表数据…';
+  let nc=normCode(raw);
   try{
+    if(!nc){
+      if(!raw) throw new Error('请输入 6 位 A 股代码或公司名称。');
+      msg.textContent='正在识别「'+raw+'」…';
+      const list=await suggest(raw);
+      if(!list.length) throw new Error('没找到「'+raw+'」对应的 A 股，请检查名称，或直接用 6 位代码。');
+      if(list.length>1){
+        renderSug(list);
+        msg.className='error';
+        msg.textContent='「'+raw+'」匹配到 '+list.length+' 只标的，请在下方列表中点选。';
+        return;
+      }
+      nc=normCode(list[0].Code);
+      if(!nc) throw new Error('无法识别「'+raw+'」的代码。');
+      document.getElementById('code').value=nc.code;
+    }
+
+    msg.textContent='正在拉取 '+nc.secucode+' 的利润表数据…';
     const data=await fetchAll(nc.secucode);
     if(!data.length) throw new Error('未找到该标的的利润表数据，请确认代码是否正确（当前仅支持 A 股）。');
-    const rows=data.map(buildRows);
-    STATE.rows=rows; STATE.meta=data[0];
 
-    const years=[...new Set(rows.filter(r=>r.raw.REPORT_TYPE==='年报').map(r=>+r.year))].sort((a,b)=>a-b);
-    if(!years.length) throw new Error('该标的没有年报数据。');
-    fillYears(years, opt.keep, opt.range);
+    // 报告期索引：年-季度 → 原始记录（用于单季拆分）
+    const idx={};
+    data.forEach(r=>{ const q=quarterOf(r); if(q>0) idx[(r.REPORT_DATE||'').slice(0,4)+'-'+q]=r; });
+    STATE.raw=data; STATE.idx=idx; STATE.meta=data[0];
+
+    // 年份范围按该标的实际披露的全部报告期生成，不设上限
+    const years=[...new Set(data.map(r=>+((r.REPORT_DATE||'').slice(0,4))))]
+                  .filter(y=>y>1990).sort((a,b)=>a-b);
+    if(!years.length) throw new Error('该标的没有可用报告期。');
+    fillYears(years,opt.keep,opt.range);
     render();
-    document.getElementById('hint').textContent=(data[0].ORG_TYPE&&data[0].ORG_TYPE!=='通用')?('报表类型：'+data[0].ORG_TYPE):'按你的定义建模，未做任何平滑或调整';
+    const org=data[0].ORG_TYPE;
+    document.getElementById('hint').textContent=(org&&org!=='通用')
+      ? ('报表类型：'+org+' · 数据至 '+(data[0].REPORT_DATE_NAME||''))
+      : ('数据更新至 '+(data[0].REPORT_DATE_NAME||'')+' · 按你的定义建模');
     syncURL(nc.code);
   }catch(e){
     showErr(e.message||'提取失败');
@@ -571,29 +689,34 @@ document.getElementById('tsv').onclick=function(){
 /* ============ 搜索建议 ============ */
 const codeEl=document.getElementById('code'), sugEl=document.getElementById('sug');
 let sugTimer=null, sugItems=[], sugIdx=-1;
+
+function renderSug(list){
+  sugItems=list.slice(0,12); sugIdx=-1;
+  if(!sugItems.length){ sugEl.classList.remove('on'); return; }
+  sugEl.innerHTML=sugItems.map((x,i)=>'<div data-i="'+i+'"><span class="c">'+esc(x.Code)+'</span><span>'+esc(x.Name)+'</span><span class="m">'+esc(x.SecurityTypeName||'')+'</span></div>').join('');
+  sugEl.classList.add('on');
+  [...sugEl.children].forEach(el=>{
+    el.onclick=function(){
+      const it=sugItems[+el.dataset.i];
+      codeEl.value=it.Code;
+      sugEl.classList.remove('on');
+      load(it.Code,{keep:true});
+    };
+  });
+}
+
 codeEl.addEventListener('input',function(){
   const q=codeEl.value.trim();
   clearTimeout(sugTimer);
   if(q.length<2 || /^\d{6}$/.test(q)){ sugEl.classList.remove('on'); return; }
   sugTimer=setTimeout(async function(){
-    try{
-      const list=await suggest(q);
-      sugItems=list.slice(0,8); sugIdx=-1;
-      if(!sugItems.length){ sugEl.classList.remove('on'); return; }
-      sugEl.innerHTML=sugItems.map((x,i)=>'<div data-i="'+i+'"><span class="c">'+esc(x.Code)+'</span><span>'+esc(x.Name)+'</span><span class="m">'+esc(x.SecurityTypeName||'')+'</span></div>').join('');
-      sugEl.classList.add('on');
-      [...sugEl.children].forEach(el=>{
-        el.onclick=function(){
-          const it=sugItems[+el.dataset.i];
-          codeEl.value=it.Code; sugEl.classList.remove('on');
-          document.getElementById('from').innerHTML=''; run();
-        };
-      });
-    }catch(e){ sugEl.classList.remove('on'); }
+    try{ renderSug(await suggest(q)); }
+    catch(e){ sugEl.classList.remove('on'); }
   },260);
 });
 codeEl.addEventListener('keydown',function(e){
-  if(!sugEl.classList.contains('on')) { if(e.key==='Enter') run(); return; }
+  if(e.key==='Enter' && !sugEl.classList.contains('on')){ run(); return; }
+  if(!sugEl.classList.contains('on')) return;
   const n=sugEl.children.length;
   if(e.key==='ArrowDown'){ e.preventDefault(); sugIdx=Math.min(sugIdx+1,n-1); }
   else if(e.key==='ArrowUp'){ e.preventDefault(); sugIdx=Math.max(sugIdx-1,0); }
@@ -607,11 +730,13 @@ document.addEventListener('click',function(e){ if(!e.target.closest('.field')) s
 /* ============ 交互 ============ */
 document.getElementById('go').onclick=run;
 ['from','to','rtype','optAsc','optAmt'].forEach(id=>{
-  document.getElementById(id).addEventListener('change',function(){ if(STATE.rows) render(); });
+  document.getElementById(id).addEventListener('change',function(){
+    if(STATE.raw) render();
+    if(id==='rtype' && STATE.raw) syncURL(normCode(codeEl.value)?.code||'');
+  });
 });
 document.getElementById('optTax').addEventListener('change',function(){
-  if(!STATE.rows) return;
-  STATE.rows=STATE.rows.map(function(c){ return buildRows(c.raw); });
+  if(!STATE.raw) return;
   render();
   document.getElementById('taxNote').style.color = this.checked?'#a35d00':'';
 });
@@ -620,14 +745,16 @@ document.getElementById('optTax').addEventListener('change',function(){
 function syncURL(code){
   const from=document.getElementById('from').value, to=document.getElementById('to').value;
   const p=new URLSearchParams({code:code, from:from, to:to});
-  if(document.getElementById('rtype').value==='ALL') p.set('rtype','ALL');
+  const rt=document.getElementById('rtype').value;
+  if(rt && rt!=='A') p.set('rtype',rt);
   history.replaceState(null,'','?'+p.toString());
 }
 (function init(){
   const q=new URLSearchParams(location.search);
   const code=q.get('code')||'600519';
   codeEl.value=code;
-  if(q.get('rtype')==='ALL') document.getElementById('rtype').value='ALL';
+  const rt=q.get('rtype');
+  if(rt && document.querySelector('#rtype option[value="'+rt+'"]')) document.getElementById('rtype').value=rt;
   const range=(q.get('from')&&q.get('to'))?[q.get('from'),q.get('to')]:null;
   load(code,{range:range});
 })();
