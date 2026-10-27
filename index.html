@@ -218,6 +218,7 @@ tr.active td.rowlink::after{color:var(--blue)}
           <option value="Q3C">三季报</option>
         </optgroup>
         <optgroup label="单季口径">
+          <option value="QS">全部单季（逐季列出）</option>
           <option value="Q2">Q2（半年报−一季报）</option>
           <option value="Q3">Q3（三季报−半年报）</option>
           <option value="Q4">Q4（年报−三季报）</option>
@@ -274,7 +275,7 @@ tr.active td.rowlink::after{color:var(--blue)}
     <li class="warnline">「口径差额」= 模型净利率 − 报表净利润率。差额主要来自税金及附加、其他业务成本、利息支出等未进模型的科目；差额为 0 表示模型完全闭合。勾选「税金及附加计入经营成本」可验证差额是否主要由该项解释。</li>
     <li>减值为负值（损失）时以负号计入；缺失数据按 0 计入加总。银行、保险、券商无「营业成本」科目，毛利率与经营性利润率不可比，显示为「—」，不适用科目同样显示「—」。</li>
     <li class="warnline">跨 2018 年年报比较需注意：新准则下研发费用自 2018 年起在利润表单列，此前计入管理费用。因此 2017 年及更早的「研发费用率」为 0、「管理费用率」已包含研发支出，两段口径不可直接对比。</li>
-    <li class="warnline">单季口径为「本期累计 − 上一报告期累计」，所有比率用单季金额重新计算，收入 YoY 与归母净利润 YoY 也换成单季同比（由单季金额自算）。2002 年以前多数公司只披露年报与中报（一季报自 2002 年起强制披露、三季报更晚），因此 Q2 及 Q3、Q4 单季在早期无法拆分，该期会从表中略去而非显示为 0。</li>
+    <li class="warnline">单季口径为「本期累计 − 上一报告期累计」，所有比率用单季金额重新计算，收入 YoY 与归母净利润 YoY 也换成单季同比（由单季金额自算）。「全部单季」用同一套拆分逻辑，只是把 Q1–Q4 全部摊开列出，四个季度相加等于该年年报数。2002 年以前多数公司只披露年报与中报（一季报自 2002 年起强制披露、三季报更晚），因此 Q2 及 Q3、Q4 单季在早期无法拆分，该期会从表中略去而非显示为 0。</li>
     <li><code>归母净利润</code> 取利润表「归属于母公司股东的净利润」绝对额；<code>归母净利润 YoY</code> 与收入 YoY 同为同比口径，<b>上年同期为负（亏损）时以 |上年同期| 为分母</b>——正数代表减亏或扭亏、负数代表增亏，与东方财富接口算法一致（例：上年亏 4.52 亿、本期盈 20.59 亿 → +555.24%）。上年同期为 0 或无数据时显示「—」。</li>
   </ol>
 </div>
@@ -387,7 +388,7 @@ const AMT_FIELDS=['TOTAL_OPERATE_INCOME','OPERATE_INCOME','OPERATE_COST','OPERAT
   'TOTAL_OPERATE_INCOME_YOY'];
 
 const MODE_LABEL={A:'年报',ALL:'全部报告期（累计）',Q1:'一季报',H1:'半年报',Q3C:'三季报',
-                  Q2:'Q2 单季',Q3:'Q3 单季',Q4:'Q4 单季'};
+                  Q2:'Q2 单季',Q3:'Q3 单季',Q4:'Q4 单季',QS:'全部单季'};
 
 function pickAmts(rec){ const o={}; for(const k of AMT_FIELDS) o[k]=num(rec[k]); return o; }
 
@@ -483,7 +484,7 @@ function buildRows(rec,amt,opt){
 function buildColumns(all,mode,idx){
   const out=[];
   const wantQ={'Q1':1,'H1':2,'Q3C':3,'Q2':2,'Q3':3,'Q4':4}[mode];
-  const isSingle=(mode==='Q2'||mode==='Q3'||mode==='Q4');
+  const isSingle=(mode==='Q2'||mode==='Q3'||mode==='Q4'||mode==='QS');
   for(const rec of all){
     const y=(rec.REPORT_DATE||'').slice(0,4), q=quarterOf(rec);
     if(q<1) continue;
@@ -500,7 +501,7 @@ function buildColumns(all,mode,idx){
       out.push(buildRows(rec,pickAmts(rec),{label:y+(q===1?'Q1':q===2?'H1':'Q3')}));
       continue;
     }
-    if(q!==wantQ) continue;
+    if(mode!=='QS' && q!==wantQ) continue;     // QS=全部单季，四个季度都取
     const sq=singleAmts(rec,idx);
     if(!sq.ok) continue;                       // 缺上一期累计，无法拆分
     let yoy=null, pny=null;
