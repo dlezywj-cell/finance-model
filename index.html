@@ -274,7 +274,8 @@ tr.active td.rowlink::after{color:var(--blue)}
     <li class="warnline">「口径差额」= 模型净利率 − 报表净利润率。差额主要来自税金及附加、其他业务成本、利息支出等未进模型的科目；差额为 0 表示模型完全闭合。勾选「税金及附加计入经营成本」可验证差额是否主要由该项解释。</li>
     <li>减值为负值（损失）时以负号计入；缺失数据按 0 计入加总。银行、保险、券商无「营业成本」科目，毛利率与经营性利润率不可比，显示为「—」，不适用科目同样显示「—」。</li>
     <li class="warnline">跨 2018 年年报比较需注意：新准则下研发费用自 2018 年起在利润表单列，此前计入管理费用。因此 2017 年及更早的「研发费用率」为 0、「管理费用率」已包含研发支出，两段口径不可直接对比。</li>
-    <li class="warnline">单季口径为「本期累计 − 上一报告期累计」，所有比率用单季金额重新计算，收入 YoY 也换成单季同比。2002 年以前多数公司只披露年报与中报（一季报自 2002 年起强制披露、三季报更晚），因此 Q2 及 Q3、Q4 单季在早期无法拆分，该期会从表中略去而非显示为 0。</li>
+    <li class="warnline">单季口径为「本期累计 − 上一报告期累计」，所有比率用单季金额重新计算，收入 YoY 与归母净利润 YoY 也换成单季同比（由单季金额自算）。2002 年以前多数公司只披露年报与中报（一季报自 2002 年起强制披露、三季报更晚），因此 Q2 及 Q3、Q4 单季在早期无法拆分，该期会从表中略去而非显示为 0。</li>
+    <li><code>归母净利润</code> 取利润表「归属于母公司股东的净利润」绝对额；<code>归母净利润 YoY</code> 与收入 YoY 同为同比口径，<b>上年同期为负（亏损）时以 |上年同期| 为分母</b>——正数代表减亏或扭亏、负数代表增亏，与东方财富接口算法一致（例：上年亏 4.52 亿、本期盈 20.59 亿 → +555.24%）。上年同期为 0 或无数据时显示「—」。</li>
   </ol>
 </div>
 
@@ -325,6 +326,9 @@ function normCode(v){
 }
 const num=v=> (v===null||v===undefined||v===''||isNaN(Number(v)))? null : Number(v);
 const pct=(a,b)=> (a===null||b===null||!b)? null : a/b*100;
+// 同比：(本期−上年同期)/|上年同期|，上年同期为负（亏损）时也能给出方向正确的百分比
+// 例：上年亏 4.52 亿、本期盈 20.59 亿 → 555.24%（与东方财富接口口径一致）
+const yoyOf=(a,b)=> (a===null||a===undefined||b===null||b===undefined||!b)? null : (a-b)/Math.abs(b)*100;
 const fmtAmt=v=> (v===null||v===undefined||isNaN(v))?'—':(v/1e8).toFixed(2);
 const z=v=> (Math.abs(v)<0.005?0:v);
 const fmtPct=v=> (v===null||v===undefined||isNaN(v))?'—':z(v).toFixed(2)+'%';
@@ -464,6 +468,8 @@ function buildRows(rec,amt,opt){
     v:{
       toi:TOI===null?null:TOI/1e8,
       yoy:('yoy' in opt)? opt.yoy : amt.TOTAL_OPERATE_INCOME_YOY,
+      pn:amt.PARENT_NETPROFIT===null?null:amt.PARENT_NETPROFIT/1e8,
+      pny:('pny' in opt)? opt.pny : num(rec.PARENT_NETPROFIT_YOY),
       gm:gm, taxAdd:taxAddR, sale:saleR, manage:manR, rnd:rndR, fin:finR, exp:expR,
       opMargin:opMargin, oth:othR, inv:invR, fv:fvR, aimp:aimpR, cimp:cimpR, adisp:adispR,
       nonOp:nonOp, opProfit:opProfit, nbin:nbinR, nbex:nbexR, nonRec:nonRec,
@@ -497,23 +503,27 @@ function buildColumns(all,mode,idx){
     if(q!==wantQ) continue;
     const sq=singleAmts(rec,idx);
     if(!sq.ok) continue;                       // 缺上一期累计，无法拆分
-    let yoy=null;
+    let yoy=null, pny=null;
     const prevYear=idx[(+y-1)+'-'+q];
     if(prevYear){
       const ps=singleAmts(prevYear,idx);
-      const a=sq.amt.TOTAL_OPERATE_INCOME, b=ps.ok?ps.amt.TOTAL_OPERATE_INCOME:null;
-      if(a!==null && b) yoy=(a/b-1)*100;
+      if(ps.ok){
+        yoy=yoyOf(sq.amt.TOTAL_OPERATE_INCOME, ps.amt.TOTAL_OPERATE_INCOME);
+        pny=yoyOf(sq.amt.PARENT_NETPROFIT,   ps.amt.PARENT_NETPROFIT);
+      }
     }
-    out.push(buildRows(rec,sq.amt,{label:y+'Q'+q,yoy:yoy,single:true}));
+    out.push(buildRows(rec,sq.amt,{label:y+'Q'+q,yoy:yoy,pny:pny,single:true}));
   }
   return out;
 }
 
 /* 行定义：k=字段, t=类型(amt/pct), c=着色(1=yoy红涨绿跌), ind=缩进, note=备注 */
 const ROWS=[
-  {grp:'一 · 收入规模'},
+  {grp:'一 · 收入与利润规模'},
   {k:'toi',  n:'营业总收入', u:'亿元', t:'amt'},
   {k:'yoy',  n:'收入 YoY',  u:'%',   t:'pct', c:1},
+  {k:'pn',   n:'归母净利润', u:'亿元', t:'amt'},
+  {k:'pny',  n:'归母净利润 YoY', u:'%', t:'pct', c:1},
 
   {grp:'二 · 第一部分：经营性', s:'毛利减期间费用'},
   {k:'gm',      n:'毛利率',        u:'%', t:'pct'},
@@ -594,7 +604,7 @@ function render(){
   STATE.colsOther = othRaw? buildColumns(othRaw,rtype,othIdx) : null;
   STATE.cols=cols;
 
-  const rows=ROWS.filter(r=> !(r.k==='toi' && !showAmt));
+  const rows=ROWS.filter(r=> !(r.t==='amt' && !showAmt));
   let html='<thead><tr><th>科目</th>';
   cols.forEach(c=>{ html+='<th>'+c.label+'</th>'; });
   html+='</tr></thead><tbody>';
@@ -800,7 +810,7 @@ function drawChart(k){
         draw(vals2[i], othColor, X(i)-gW/2+bW+3, bW, n2);
       } else {
         const v=vals[i];
-        draw(v, (v!==null&&v<0)?'#f0a9a5':curColor, X(i)-bW/2, bW, n1);
+        draw(v, (v!==null&&v<0)?'#6bbf8f':curColor, X(i)-bW/2, bW, n1);
         if(step>=42 && v!==null){
           const yv=Y(v), ly=(v>=0? yv-7 : yv+15);
           g+='<text x="'+X(i).toFixed(1)+'" y="'+ly.toFixed(1)+'" text-anchor="middle" font-size="10.5" fill="#5b6a82">'+(Math.abs(v)>=100? v.toFixed(0) : v.toFixed(2))+'</text>';
@@ -965,7 +975,7 @@ function showErr(m){
 
 /* ============ 导出 ============ */
 function matrix(){
-  const cols=STATE.cols, rows=ROWS.filter(r=>!r.grp && !(r.k==='toi' && !document.getElementById('optAmt').checked));
+  const cols=STATE.cols, rows=ROWS.filter(r=>!r.grp && !(r.t==='amt' && !document.getElementById('optAmt').checked));
   const head=['科目'].concat(cols.map(c=>c.label));
   const body=rows.map(r=>{
     const line=[r.n+(r.u?'('+r.u+')':'')];
