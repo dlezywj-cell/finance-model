@@ -190,7 +190,7 @@ tr.active td.rowlink::after{color:var(--blue)}
   <div class="row">
     <div class="field">
       <label>股票代码 / 名称</label>
-      <input class="input" id="code" placeholder="600519 或 贵州茅台" autocomplete="off" spellcheck="false">
+      <input class="input" id="code" placeholder="600519 / 贵州茅台 / 寒武纪" autocomplete="off" spellcheck="false">
       <div class="sug" id="sug"></div>
     </div>
     <div class="field">
@@ -347,12 +347,30 @@ async function fetchAll(secucode){
   if(!j||!j.result||!j.result.data||!j.result.data.length) return [];
   return j.result.data;
 }
+// 东财 suggest 接口的板块标识并不统一：
+// 主板/创业板 Classify='AStock'（SecurityTypeName 沪A / 深A）
+// 科创板 Classify='23'（SecurityTypeName 科创板）、北交所 Classify='NEEQ'（SecurityTypeName 京A）
+// 因此不能只认 Classify==='AStock'，否则 688 / 920 开头的股票一律搜不到
+const A_SHARE_TYPES=['沪A','深A','创业板','科创板','京A','北A','京市A'];
+let LAST_SUG=[];   // 最近一次搜索的原始结果，用于给出更准确的报错
+function isAShare(x){
+  const c=String((x&&x.Code)||'');
+  if(!/^\d{6}$/.test(c)) return false;
+  if(A_SHARE_TYPES.indexOf(String(x.SecurityTypeName||''))>=0) return true;
+  return x.Classify==='AStock';
+}
 async function suggest(q){
-  const url=SUG+'?input='+encodeURIComponent(q)+'&type=14&token='+SUG_TOKEN+'&count=12';
-  const j=await jsonp(url,15000,'cb').catch(()=>null);
+  const url=SUG+'?input='+encodeURIComponent(q)+'&type=14&token='+SUG_TOKEN+'&count=20';
+  // 接口偶发无响应：重试一次，仍失败则抛出「网络问题」而不是伪装成「没搜到」
+  let j=null, err=null;
+  for(let i=0;i<2;i++){
+    try{ j=await jsonp(url,12000,'cb'); break; }
+    catch(e){ err=e; j=null; }
+  }
+  if(!j) throw new Error(err&&err.message?err.message:'搜索接口无响应');
   const arr=(j&&j.QuotationCodeTable&&j.QuotationCodeTable.Data)||[];
-  // 只保留 A 股，且代码为 6 位数字（排除板块、债券、港股等）
-  return arr.filter(x=>x.Classify==='AStock' && /^\d{6}$/.test(x.Code||''));
+  LAST_SUG=arr;
+  return arr.filter(isAShare);
 }
 
 /* ============ 建模 ============ */
@@ -836,10 +854,23 @@ window.addEventListener('resize',function(){
 async function resolveCode(raw, sug){
   const nc=normCode(raw);
   if(nc) return {code:nc};
-  const list=await suggest(raw);
-  if(!list.length) return {err:'没找到「'+raw+'」对应的 A 股，请检查名称，或直接用 6 位代码。'};
-  if(list.length>1){ sug.paint(list); return {multi:list.length}; }
-  const one=normCode(list[0].Code);
+  const q=String(raw||'').trim().replace(/\s+/g,'');
+  let list;
+  try{ list=await suggest(q); }
+  catch(e){ return {err:'搜索接口暂时没有响应（'+(e.message||'网络异常')+'），请重试一次，或直接输入 6 位代码。'}; }
+  if(!list.length){
+    // 搜到了东西但全被过滤掉 → 多半只匹配到港股/基金，给出明确原因
+    const other=LAST_SUG.filter(function(x){ return !isAShare(x); })[0];
+    if(LAST_SUG.length && other)
+      return {err:'「'+raw+'」只匹配到'+(other.SecurityTypeName||'非 A 股标的')
+        +'（'+other.Code+' '+other.Name+'），本工具仅支持 A 股：沪市、深市、创业板、科创板、北交所。'};
+    return {err:'没找到「'+raw+'」对应的 A 股，请检查名称，或直接用 6 位代码。'};
+  }
+  // 名称完全一致优先，避免「输入全称还要下拉点选」
+  const exact=list.filter(function(x){ return String(x.Name||'').replace(/\s+/g,'')===q; });
+  const pick = exact.length===1 ? exact[0] : (list.length===1 ? list[0] : null);
+  if(!pick){ sug.paint(list); return {multi:list.length}; }
+  const one=normCode(pick.Code);
   if(!one) return {err:'无法识别「'+raw+'」的代码。'};
   return {code:one, picked:one.code};
 }
@@ -858,7 +889,7 @@ async function load(input,opt){
     msg.textContent='正在识别标的…';
     const r1=await resolveCode(raw, sugMain);
     if(r1.err) throw new Error(r1.err);
-    if(r1.multi){ msg.className='error'; msg.textContent='「'+raw+'」匹配到 '+r1.multi+' 只标的，请在下方列表中点选。'; return; }
+    if(r1.multi){ msg.className='error'; msg.textContent='「'+raw+'」匹配到 '+r1.multi+' 只标的，请在下方列表中点选（最多显示 12 只，可多打几个字缩小范围）。'; return; }
     const nc=r1.code;
     if(r1.picked) codeEl.value=r1.picked;
 
@@ -870,7 +901,7 @@ async function load(input,opt){
       if(r2.multi){
         codeEl2.focus();
         msg.className='error';
-        msg.textContent='对比标的「'+altRaw+'」匹配到 '+r2.multi+' 只，请在下方列表中点选。';
+        msg.textContent='对比标的「'+altRaw+'」匹配到 '+r2.multi+' 只，请在下方列表中点选（最多显示 12 只）。';
         return;
       }
       nc2=r2.code;
