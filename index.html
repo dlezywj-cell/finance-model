@@ -121,6 +121,28 @@ td.max{font-weight:700;color:#12365f}
 .unit{font-size:11px;color:var(--txt3);font-weight:400;margin-left:4px;font-family:inherit}
 tfoot td{padding:8px 10px;font-size:11.5px;color:var(--txt3);background:#fcfcfd;border-top:1px solid var(--line)}
 
+/* 趋势图 */
+body.chart-open .scroll{max-height:calc(100vh - 600px);min-height:200px}
+body.chart-open #foot{display:none}
+@media (max-width:760px){body.chart-open .scroll{max-height:none;min-height:0}}
+.chart-card{background:var(--card);border-radius:10px;box-shadow:0 2px 5px rgba(0,0,0,.05);margin-top:14px;overflow:hidden;display:none}
+.chart-card.on{display:block}
+.chart-head{display:flex;align-items:center;gap:10px;padding:12px 16px 8px;border-bottom:1px solid var(--line)}
+.chart-title{font-size:13.5px;font-weight:600;color:#1c2430}
+.chart-sub{font-size:11.5px;color:var(--txt3);margin-left:8px}
+.chart-tag{font-size:10.5px;padding:1px 7px;border-radius:20px;background:#eef2f7;color:#54627a;margin-left:8px}
+.chart-close{margin-left:auto;appearance:none;border:0;background:transparent;color:#9aa6b8;font-size:20px;line-height:1;cursor:pointer;padding:2px 6px;border-radius:4px}
+.chart-close:hover{background:#f0f3f7;color:#495057}
+#chartBody{padding:6px 10px 12px}
+#chartBody svg{display:block}
+td.rowlink{position:relative;padding-right:20px !important;cursor:pointer;transition:color .12s}
+td.rowlink:hover{color:var(--blue) !important}
+td.rowlink::after{content:'▸';position:absolute;right:6px;top:50%;transform:translateY(-50%);color:#ccd6e4;font-size:10px;font-family:inherit}
+td.rowlink:hover::after{color:var(--blue)}
+tr.active td{background:#e2eeff !important}
+tr.active td:first-child{color:#0f3f78 !important;font-weight:600;box-shadow:inset 3px 0 0 var(--blue)}
+tr.active td.rowlink::after{color:var(--blue)}
+
 /* 说明 */
 .notes{margin-top:14px;background:var(--card);border-radius:10px;box-shadow:0 2px 5px rgba(0,0,0,.05);padding:14px 18px;font-size:12px;color:var(--txt2);line-height:1.85}
 .notes h3{margin:0 0 8px;font-size:12.5px;color:#39465c;font-weight:600}
@@ -217,6 +239,16 @@ tfoot td{padding:8px 10px;font-size:11.5px;color:var(--txt3);background:#fcfcfd;
 <div id="metaBox"></div>
 <div class="wrap"><div id="msg" style="display:none"></div><div class="scroll" id="scroll" style="display:none"><table id="tbl"></table></div></div>
 
+<div class="chart-card" id="chartCard">
+  <div class="chart-head">
+    <span class="chart-title" id="chartTitle">—</span>
+    <span class="chart-sub" id="chartSub"></span>
+    <span class="chart-tag" id="chartTag"></span>
+    <button class="chart-close" id="chartClose" title="关闭">×</button>
+  </div>
+  <div id="chartBody"></div>
+</div>
+
 <div class="notes">
   <h3>口径定义（全部率值以「营业总收入」为分母）</h3>
   <ol>
@@ -241,7 +273,7 @@ const API='https://datacenter-web.eastmoney.com/api/data/v1/get';
 const SUG='https://searchapi.eastmoney.com/api/suggest/get';
 const SUG_TOKEN='D43BF722C8E33BDC906FB84D85E326E8';
 const NOW=new Date().getFullYear();
-let STATE={raw:null,idx:null,meta:null,cols:null};
+let STATE={raw:null,idx:null,meta:null,cols:null,chartKey:null};
 
 /* ============ JSONP ============ */
 let seq=0;
@@ -513,6 +545,7 @@ function render(){
       +(all[0]?'。该标的最新数据为 '+(all[0].REPORT_DATE_NAME||'')+'，请放宽年份范围或换口径。':'。');
     document.getElementById('csv').disabled=true;
     document.getElementById('tsv').disabled=true;
+    closeChart();
     return;
   }
   msg.style.display='none'; scroll.style.display='block';
@@ -533,8 +566,8 @@ function render(){
         if(v>mv){mv=v;maxIdx=i;} });
       if(!allNonNeg) maxIdx=-1;
     }
-    const cls = r.key?'key' : (r.chk?'chkrow':'');
-    html+='<tr class="'+cls+'"><td'+(r.ind?' class="ind"':'')+'>'+r.n+(r.u?'<span class="unit">'+r.u+'</span>':'')+'</td>';
+    const cls = (r.key?'key' : (r.chk?'chkrow':'')) + (STATE.chartKey===r.k?' active':'');
+    html+='<tr class="'+cls+'"><td class="rowlink'+(r.ind?' ind':'')+'" data-k="'+r.k+'">'+r.n+(r.u?'<span class="unit">'+r.u+'</span>':'')+'</td>';
     cols.forEach((c,i)=>{
       const v=c.v[r.k];
       if(v===null||v===undefined||isNaN(v)){
@@ -577,8 +610,153 @@ function render(){
     +'</div>';
   document.getElementById('csv').disabled=false;
   document.getElementById('tsv').disabled=false;
+
+  // 图表跟随当前口径重绘；科目被隐藏或数据不足则关闭
+  if(STATE.chartKey){
+    if(rows.some(x=>x.k===STATE.chartKey)) drawChart(STATE.chartKey);
+    else closeChart();
+  }
 }
 const esc=s=>String(s).replace(/[&<>"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));
+
+/* ============ 趋势图 ============ */
+function closeChart(){
+  STATE.chartKey=null;
+  document.body.classList.remove('chart-open');
+  const card=document.getElementById('chartCard');
+  if(card) card.classList.remove('on');
+  document.querySelectorAll('#tbl tr.active').forEach(function(tr){ tr.classList.remove('active'); });
+}
+
+function toggleChart(k){
+  if(STATE.chartKey===k){ closeChart(); return; }
+  STATE.chartKey=k;
+  document.querySelectorAll('#tbl tr.active').forEach(function(tr){ tr.classList.remove('active'); });
+  const cell=document.querySelector('#tbl td[data-k="'+k+'"]');
+  if(cell) cell.parentNode.classList.add('active');
+  drawChart(k);
+  const card=document.getElementById('chartCard');
+  card.classList.add('on');
+  document.body.classList.add('chart-open');
+  setTimeout(function(){ card.scrollIntoView({behavior:'smooth',block:'nearest'}); },40);
+}
+
+function drawChart(k){
+  const row=ROWS.find(function(r){ return r.k===k; });
+  const cols=STATE.cols||[];
+  if(!row || !cols.length) return;
+  const host=document.getElementById('chartBody');
+  document.getElementById('chartCard').classList.add('on');
+  document.body.classList.add('chart-open');
+  document.getElementById('chartTitle').textContent=row.n;
+  document.getElementById('chartSub').textContent=
+    cols[0].label+' → '+cols[cols.length-1].label+' · '+cols.length+' 个报告期';
+
+  const isAmt=(row.t==='amt');
+  const unit=(row.t==='amt')? '亿元' : (row.t==='pp'? 'pp' : '%');
+  document.getElementById('chartTag').textContent=(isAmt?'柱状图 · ':'折线图 · ')+unit;
+
+  const vals=cols.map(function(c){ const v=c.v[k]; return (v===null||v===undefined||isNaN(v))?null:v; });
+  const nums=vals.filter(function(v){ return v!==null; });
+  if(!nums.length){
+    host.innerHTML='<div style="padding:34px;text-align:center;color:#8a94a6;font-size:12.5px">该科目在所选区间内没有数据</div>';
+    return;
+  }
+
+  const W=Math.max(360, host.clientWidth||760);
+  const H=294;
+  const padL=56, padR=20, padT=26, padB=46;
+  const iw=W-padL-padR, ih=H-padT-padB;
+
+  // 坐标范围：柱状图必须含 0 基线（柱长代表量级）；折线图只覆盖数据区间（看趋势）
+  let rawMx=Math.max.apply(null, nums), rawMn=Math.min.apply(null, nums);
+  if(isAmt){ rawMn=Math.min(rawMn,0); rawMx=Math.max(rawMx,0); }
+  if(rawMx===rawMn){ const d=(Math.abs(rawMx)||1)*0.2; rawMx+=d; rawMn-=d; }
+  const rg=(rawMx-rawMn)||1;
+  const mag=Math.pow(10,Math.floor(Math.log10(rg/5)));
+  const nz=(rg/5)/mag;
+  const stp=(nz<=1?1:nz<=2?2:nz<=2.5?2.5:nz<=5?5:10)*mag;
+  const mn = Math.floor(rawMn/stp)*stp;
+  const mx = Math.ceil(rawMx/stp)*stp;
+
+  const Y=function(v){ return padT + ih*(mx-v)/(mx-mn); };
+  const step=iw/cols.length;
+  const X=function(i){ return padL + step*(i+0.5); };
+  const y0=Y(0);
+  const ESC=function(t){ return String(t).replace(/[&<>"]/g,function(m){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m];}); };
+  const dec = stp>=1 ? 0 : (stp>=0.1 ? 1 : 2);
+  const fmtTick=function(v){
+    if(v===0) return '0';
+    if(Math.abs(v)>=10000) return (v/10000).toFixed(1)+'万';
+    return v.toFixed(dec);
+  };
+
+  let g='';
+  const nTick=Math.round((mx-mn)/stp);
+  for(let i=0;i<=nTick;i++){
+    const v=mn+stp*i;
+    const yy=Y(v);
+    g+='<line x1="'+padL+'" y1="'+yy.toFixed(1)+'" x2="'+(W-padR)+'" y2="'+yy.toFixed(1)+'" stroke="#f0f3f7" stroke-width="1"/>';
+    g+='<text x="'+(padL-9)+'" y="'+(yy+4).toFixed(1)+'" text-anchor="end" font-size="11" fill="#98a3b5">'+fmtTick(v)+'</text>';
+  }
+  g+='<line x1="'+padL+'" y1="'+(H-padB).toFixed(1)+'" x2="'+(W-padR)+'" y2="'+(H-padB).toFixed(1)+'" stroke="#e4e9f0" stroke-width="1"/>';
+  if(mn<0 && mx>0){
+    g+='<line x1="'+padL+'" y1="'+y0.toFixed(1)+'" x2="'+(W-padR)+'" y2="'+y0.toFixed(1)+'" stroke="#c8d2e0" stroke-width="1.1" stroke-dasharray="4 3"/>';
+  }
+
+  const skip=Math.max(1, Math.ceil(46/step));
+  cols.forEach(function(c,i){
+    if(i%skip!==0 && i!==cols.length-1) return;
+    g+='<text x="'+X(i).toFixed(1)+'" y="'+(H-15)+'" text-anchor="middle" font-size="11" fill="#8a94a6">'+ESC(c.label)+'</text>';
+  });
+
+  if(isAmt){
+    const bw=Math.max(8, Math.min(86, step*0.5));
+    cols.forEach(function(c,i){
+      const v=vals[i]; if(v===null) return;
+      const yv=Y(v);
+      const top=Math.min(yv,y0), hgt=Math.max(1, Math.abs(yv-y0));
+      const neg=v<0;
+      g+='<rect x="'+(X(i)-bw/2).toFixed(1)+'" y="'+top.toFixed(1)+'" width="'+bw.toFixed(1)+'" height="'+hgt.toFixed(1)+'" rx="1.5" fill="'+(neg?'#f0a9a5':'#007bff')+'"><title>'+ESC(c.label)+'：'+v.toFixed(2)+' 亿元</title></rect>';
+      if(step>=42){
+        const ly=(v>=0? yv-7 : yv+15);
+        g+='<text x="'+X(i).toFixed(1)+'" y="'+ly.toFixed(1)+'" text-anchor="middle" font-size="10.5" fill="#5b6a82">'+(Math.abs(v)>=100? v.toFixed(0) : v.toFixed(2))+'</text>';
+      }
+    });
+  } else {
+    let d='', started=false;
+    vals.forEach(function(v,i){
+      if(v===null){ started=false; return; }
+      d+=(started?'L':'M')+X(i).toFixed(1)+','+Y(v).toFixed(1)+' ';
+      started=true;
+    });
+    g+='<path d="'+d+'" fill="none" stroke="#007bff" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>';
+    vals.forEach(function(v,i){
+      if(v===null) return;
+      g+='<circle cx="'+X(i).toFixed(1)+'" cy="'+Y(v).toFixed(1)+'" r="3.6" fill="#fff" stroke="'+(v<0?'#dc3545':'#007bff')+'" stroke-width="1.8"><title>'+ESC(cols[i].label)+'：'+v.toFixed(2)+' '+unit+'</title></circle>';
+      if(step>=46){
+        const ly=(v>=0? Y(v)-9 : Y(v)+16);
+        g+='<text x="'+X(i).toFixed(1)+'" y="'+ly.toFixed(1)+'" text-anchor="middle" font-size="10.5" fill="#5b6a82">'+v.toFixed(2)+'</text>';
+      }
+    });
+  }
+
+  host.innerHTML='<svg width="'+W+'" height="'+H+'" viewBox="0 0 '+W+' '+H+'" xmlns="http://www.w3.org/2000/svg">'+g+'</svg>';
+}
+
+document.getElementById('tbl').addEventListener('click',function(e){
+  const td=e.target.closest('td.rowlink');
+  if(!td || !td.dataset.k) return;
+  toggleChart(td.dataset.k);
+});
+document.getElementById('chartClose').onclick=closeChart;
+
+let rzTimer=null;
+window.addEventListener('resize',function(){
+  clearTimeout(rzTimer);
+  rzTimer=setTimeout(function(){ if(STATE.chartKey) drawChart(STATE.chartKey); },180);
+});
+
 
 /* ============ 提取 ============ */
 async function load(input,opt){
