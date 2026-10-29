@@ -138,8 +138,19 @@ body.chart-open #foot{display:none}
 .swap-btn:hover{background:#f2f6fc;border-color:#c3d4ea;color:var(--blue-d)}
 .chart-close{margin-left:auto;appearance:none;border:0;background:transparent;color:#9aa6b8;font-size:20px;line-height:1;cursor:pointer;padding:2px 6px;border-radius:4px}
 .chart-close:hover{background:#f0f3f7;color:#495057}
-#chartBody{padding:6px 10px 12px}
+#chartBody{padding:6px 10px 12px;position:relative}
 #chartBody svg{display:block}
+/* 悬停提示 */
+.ctip{position:absolute;left:0;top:0;pointer-events:none;z-index:6;background:rgba(24,32,44,.95);color:#fff;
+  font-size:11.5px;line-height:1.55;padding:7px 10px 8px;border-radius:7px;white-space:nowrap;
+  box-shadow:0 6px 18px rgba(16,24,40,.22);opacity:0;transition:opacity .09s}
+.ctip.on{opacity:1}
+.ctip-h{color:#a9b8cd;font-size:10.5px;letter-spacing:.3px;margin-bottom:4px}
+.ctip-r{display:flex;align-items:center;gap:6px}
+.ctip-r i{width:8px;height:8px;border-radius:2px;flex:none}
+.ctip-r .n{color:#cfdae9}
+.ctip-r .v{margin-left:10px;font-weight:650;font-variant-numeric:tabular-nums;text-align:right}
+.ctip-hit{cursor:crosshair}
 td.rowlink{position:relative;padding-right:20px !important;cursor:pointer;transition:color .12s}
 td.rowlink:hover{color:var(--blue) !important}
 td.rowlink::after{content:'▸';position:absolute;right:6px;top:50%;transform:translateY(-50%);color:#ccd6e4;font-size:10px;font-family:inherit}
@@ -807,7 +818,7 @@ function drawChart(k){
         if(v===null) return;
         const yv=Y(v);
         const top=Math.min(yv,y0), hgt=Math.max(1, Math.abs(yv-y0));
-        g+='<rect x="'+dx.toFixed(1)+'" y="'+top.toFixed(1)+'" width="'+w.toFixed(1)+'" height="'+hgt.toFixed(1)+'" rx="1.5" fill="'+color+'"><title>'+ESC(label)+' '+ESC(c.label)+'：'+v.toFixed(2)+' 亿元</title></rect>';
+        g+='<rect x="'+dx.toFixed(1)+'" y="'+top.toFixed(1)+'" width="'+w.toFixed(1)+'" height="'+hgt.toFixed(1)+'" rx="1.5" fill="'+color+'"/>';
       };
       if(has2){
         draw(vals[i], curColor, X(i)-gW/2, bW, n1);
@@ -833,7 +844,7 @@ function drawChart(k){
       g+='<path d="'+d+'" fill="none" stroke="'+color+'" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>';
       series.forEach(function(v,i){
         if(v===null) return;
-        g+='<circle cx="'+X(i).toFixed(1)+'" cy="'+Y(v).toFixed(1)+'" r="3.4" fill="#fff" stroke="'+(has2?color:(v<0?'#dc3545':color))+'" stroke-width="1.8"><title>'+ESC(name)+' '+ESC(cols[i].label)+'：'+v.toFixed(2)+' '+unit+'</title></circle>';
+        g+='<circle cx="'+X(i).toFixed(1)+'" cy="'+Y(v).toFixed(1)+'" r="3.4" fill="#fff" stroke="'+(has2?color:(v<0?'#dc3545':color))+'" stroke-width="1.8"/>';
       });
     };
     if(has2) line(vals2, othColor, n2);
@@ -847,7 +858,79 @@ function drawChart(k){
     }
   }
 
-  host.innerHTML='<svg width="'+W+'" height="'+H+'" viewBox="0 0 '+W+' '+H+'" xmlns="http://www.w3.org/2000/svg">'+g+'</svg>';
+  // ---- 悬停交互层：列底色带 + 竖向参考线 + 焦点圆点 + 跟随提示 ----
+  const band='<rect id="cband" x="0" y="'+padT+'" width="'+step.toFixed(1)+'" height="'+ih.toFixed(1)+'" fill="#e9f1ff" opacity="0"/>';
+  const guide='<line id="cguide" x1="0" y1="'+padT+'" x2="0" y2="'+(H-padB)+'" stroke="#b9c8dd" stroke-width="1" stroke-dasharray="3 3" opacity="0"/>';
+  const dotSvg=function(color){ return '<circle r="0" fill="#fff" stroke="'+color+'" stroke-width="2.2"/>'; };
+  const dots='<g id="cdots" pointer-events="none">'+dotSvg(curColor)+(has2?dotSvg(othColor):'')+'</g>';
+  const hit='<rect id="chit" x="'+padL+'" y="'+padT+'" width="'+iw.toFixed(1)+'" height="'+ih.toFixed(1)+'" fill="#fff" fill-opacity="0" pointer-events="all" class="ctip-hit"/>';
+
+  host.innerHTML='<div class="ctip" id="ctip"></div>'
+    +'<svg width="'+W+'" height="'+H+'" viewBox="0 0 '+W+' '+H+'" xmlns="http://www.w3.org/2000/svg">'
+    +band+g+guide+dots+hit+'</svg>';
+
+  const svgEl=host.querySelector('svg'), tipEl=host.querySelector('#ctip'),
+        bandEl=host.querySelector('#cband'), guideEl=host.querySelector('#cguide'),
+        hitEl=host.querySelector('#chit'), dotEls=host.querySelectorAll('#cdots circle');
+  const fmtVal=function(v){
+    if(v===null||v===undefined||isNaN(v)) return '—';
+    return isAmt? v.toFixed(2)+' 亿元' : z(v).toFixed(2)+unit;
+  };
+  function hideTip(){
+    if(tipEl) tipEl.classList.remove('on');
+    bandEl.setAttribute('opacity','0');
+    guideEl.setAttribute('opacity','0');
+    Array.prototype.forEach.call(dotEls,function(d){ d.setAttribute('r','0'); });
+  }
+  function hoverAt(e){
+    const rc=svgEl.getBoundingClientRect();
+    if(!rc.width||!rc.height) return;
+    const kx=W/rc.width;
+    const mx=(e.clientX-rc.left)*kx, my=(e.clientY-rc.top)*(H/rc.height);
+    const i=Math.floor((mx-padL)/step);
+    if(i<0||i>=cols.length){ hideTip(); return; }
+    const cx=X(i);
+    bandEl.setAttribute('x',(padL+step*i).toFixed(1));
+    bandEl.setAttribute('width',step.toFixed(1));
+    bandEl.setAttribute('opacity','1');
+    guideEl.setAttribute('x1',cx.toFixed(1));
+    guideEl.setAttribute('x2',cx.toFixed(1));
+    guideEl.setAttribute('opacity','1');
+    let di=0;
+    const putDot=function(v){
+      const el=dotEls[di++]; if(!el) return;
+      if(v===null||v===undefined||isNaN(v)){ el.setAttribute('r','0'); return; }
+      el.setAttribute('cx',cx.toFixed(1));
+      el.setAttribute('cy',Y(v).toFixed(1));
+      el.setAttribute('r','4.6');
+    };
+    if(!isAmt){                                  // 柱状图由列底色带指示，不需要焦点圆点
+      putDot(vals[i]);
+      if(has2) putDot(vals2[i]);
+    }
+
+    let t='<div class="ctip-h">'+ESC(cols[i].label)+'</div>';
+    t+='<div class="ctip-r"><i style="background:'+curColor+'"></i><span class="n">'+ESC(n1)+'</span><span class="v">'+fmtVal(vals[i])+'</span></div>';
+    if(has2) t+='<div class="ctip-r"><i style="background:'+othColor+'"></i><span class="n">'+ESC(n2)+'</span><span class="v">'+fmtVal(vals2[i])+'</span></div>';
+    tipEl.innerHTML=t;
+    tipEl.classList.add('on');
+
+    // 定位：换算成相对 #chartBody 的 CSS 像素，贴边时自动翻到另一侧
+    const ox=svgEl.offsetLeft||0, oy=svgEl.offsetTop||0;
+    const mxCss=ox+(e.clientX-rc.left), myCss=oy+(e.clientY-rc.top);
+    const cxCss=ox+cx/kx;
+    const tw=tipEl.offsetWidth, th=tipEl.offsetHeight;
+    let left=cxCss+14;
+    if(left+tw>host.clientWidth-6) left=cxCss-tw-14;
+    if(left<4) left=4;
+    let top=myCss+16;
+    if(top+th>oy+rc.height-4) top=myCss-th-12;
+    if(top<oy+2) top=oy+2;
+    tipEl.style.left=left+'px';
+    tipEl.style.top=top+'px';
+  }
+  hitEl.addEventListener('mousemove',hoverAt);
+  hitEl.addEventListener('mouseleave',hideTip);
 }
 
 document.getElementById('tbl').addEventListener('click',function(e){
