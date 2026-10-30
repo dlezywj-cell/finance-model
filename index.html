@@ -210,6 +210,11 @@ tr.active td.rowlink::after{color:var(--blue)}
       <div class="sug" id="sug2"></div>
     </div>
     <div class="field">
+      <label>对比标的三 <span style="color:#b8c2d1">可选</span></label>
+      <input class="input" id="code3" placeholder="再对比一只" autocomplete="off" spellcheck="false">
+      <div class="sug" id="sug3"></div>
+    </div>
+    <div class="field">
       <label>起始年份</label>
       <select id="from"></select>
     </div>
@@ -298,7 +303,9 @@ const API='https://datacenter-web.eastmoney.com/api/data/v1/get';
 const SUG='https://searchapi.eastmoney.com/api/suggest/get';
 const SUG_TOKEN='D43BF722C8E33BDC906FB84D85E326E8';
 const NOW=new Date().getFullYear();
-let STATE={raw:null,idx:null,meta:null,cols:null,chartKey:null,raw2:null,idx2:null,meta2:null,colsOther:null,showWhich:1};
+// 颜色按输入顺序绑定到股票本身：第1只蓝、第2只橙、第3只紫，切换显示对象时不跳色
+const COLORS=['#007bff','#f59e0b','#8b5cf6'];
+let STATE={list:[],showWhich:0,cols:null,others:[],chartKey:null};
 
 /* ============ JSONP ============ */
 let seq=0;
@@ -587,15 +594,12 @@ function render(){
   const asc=document.getElementById('optAsc').checked;
   const showAmt=document.getElementById('optAmt').checked;
 
-  // 当前展示 / 对照
-  const dual=!!(STATE.raw2 && STATE.raw2.length);
-  const useAlt=(dual && STATE.showWhich===2);
-  const curRaw = useAlt? STATE.raw2 : (STATE.raw||[]);
-  const curIdx = useAlt? STATE.idx2 : STATE.idx;
-  const curMeta= useAlt? STATE.meta2 : STATE.meta;
-  const othRaw = dual? (useAlt? STATE.raw : STATE.raw2) : null;
-  const othIdx = dual? (useAlt? STATE.idx : STATE.idx2) : null;
-  const othMeta= dual? (useAlt? STATE.meta : STATE.meta2) : null;
+  // 当前展示的序列 / 其余对照序列
+  const n=STATE.list.length;
+  if(!n){ closeChart(); return; }
+  const show=Math.min(Math.max(STATE.showWhich,0), n-1);
+  const cur=STATE.list[show];
+  const curRaw=cur.raw, curIdx=cur.idx, curMeta=cur.meta;
   if(!curRaw.length){ closeChart(); return; }
 
   let cols=buildColumns(curRaw,rtype,curIdx);
@@ -615,8 +619,10 @@ function render(){
   }
   msg.style.display='none'; scroll.style.display='block';
 
-  // 对照序列（不做区间过滤，绘图时按报告期标签对齐）
-  STATE.colsOther = othRaw? buildColumns(othRaw,rtype,othIdx) : null;
+  // 其余序列（不做区间过滤，绘图时按报告期标签对齐）
+  STATE.others=STATE.list.filter(function(s){ return s!==cur; }).map(function(s){
+    return {color:s.color, name:(s.meta&&s.meta.SECURITY_NAME_ABBR)||'', cols:buildColumns(s.raw,rtype,s.idx)};
+  });
   STATE.cols=cols;
 
   const rows=ROWS.filter(r=> !(r.t==='amt' && !showAmt));
@@ -664,7 +670,8 @@ function render(){
   const mb=document.getElementById('metaBox');
   const nocost=cols.some(c=>c.noCost);
   const upd=(last.UPDATE_DATE||last.NOTICE_DATE||'').slice(0,10);
-  const othName=othMeta? (othMeta.SECURITY_NAME_ABBR||'') : '';
+  const others=STATE.others;
+  const othName=others.map(function(o){ return o.name; }).join(' / ');
   mb.innerHTML='<div class="meta">'
     +'<span class="name">'+esc(last.SECURITY_NAME_ABBR||'')+'</span>'
     +'<span class="code">'+esc(last.SECUCODE||'')+'</span>'
@@ -672,14 +679,14 @@ function render(){
     +'<span class="kv">本期 <b>'+cols.length+'</b> 个</span>'
     +'<span class="kv">区间 <b>'+cols[0].label+' → '+cols[cols.length-1].label+'</b></span>'
     +'<span class="kv">数据已更新至 <b>'+esc(last.REPORT_DATE_NAME||'—')+'</b></span>'
-    +(dual? '<span class="kv">对照 <b>'+esc(othName)+'</b></span><button class="swap-btn" id="swapBtn">⇄ 切换主副</button>' : '')
+    +(others.length? '<span class="kv">对比 <b>'+esc(othName)+'</b></span><button class="swap-btn" id="swapBtn">⇄ 切换标的 '+(show+1)+'/'+n+'</button>' : '')
     +(nocost?'<span class="pill warn">金融类报表：无营业成本，毛利率不可比</span>':'')
     +(last.CURRENCY&&last.CURRENCY!=='CNY'?'<span class="pill warn">币种 '+esc(last.CURRENCY)+'</span>':'')
     +(cols.some(c=>c.single)?'<span class="pill">单季口径</span>':'')
     +'</div>';
 
   const sb=document.getElementById('swapBtn');
-  if(sb) sb.onclick=function(){ STATE.showWhich = (STATE.showWhich===1?2:1); render(); };
+  if(sb) sb.onclick=function(){ STATE.showWhich=(show+1)%n; render(); };
 
   document.getElementById('csv').disabled=false;
   document.getElementById('tsv').disabled=false;
@@ -722,26 +729,19 @@ function drawChart(k){
   document.getElementById('chartCard').classList.add('on');
   document.body.classList.add('chart-open');
 
-  // 对照序列：按报告期标签对齐
-  const cols2=STATE.colsOther||null;
-  let vals2=null;
-  if(cols2 && cols2.length){
+  // 序列：当前展示的 + 其余对照（按报告期标签对齐，不做区间过滤）
+  const showS=STATE.list[Math.min(Math.max(STATE.showWhich,0), Math.max(0,STATE.list.length-1))]||{};
+  const curColor=showS.color||'#007bff';
+  const curName=(showS.meta&&showS.meta.SECURITY_NAME_ABBR)||'';
+  const vals=cols.map(function(c){ const v=c.v[k]; return (v===null||v===undefined||isNaN(v))?null:v; });
+  const series=[{name:curName, color:curColor, vals:vals}];
+  (STATE.others||[]).forEach(function(o){
     const map={};
-    cols2.forEach(function(c){ const v=c.v[k]; map[c.label]=(v===null||v===undefined||isNaN(v))?null:v; });
-    vals2=cols.map(function(c){ return Object.prototype.hasOwnProperty.call(map,c.label)? map[c.label] : null; });
-  }
-  const has2=!!(vals2 && vals2.some(function(v){ return v!==null; }));
-
-  // 颜色跟随股票本身：用户输入的主标的固定蓝、对比标的固定橙，切换主副时不跳色
-  const useAlt=(STATE.showWhich===2);
-  const mLocal=STATE.meta, mOther=STATE.meta2;
-  const nMain=mLocal? (mLocal.SECURITY_NAME_ABBR||'') : '';
-  const nOther=(has2 && mOther)? (mOther.SECURITY_NAME_ABBR||'') : '';
-  const n1 = useAlt? nOther : nMain;      // 当前序列名称
-  const n2 = useAlt? nMain  : nOther;     // 另一序列名称
-  const C1='#007bff', C2='#f59e0b';
-  const curColor = useAlt? C2 : C1;
-  const othColor = useAlt? C1 : C2;
+    o.cols.forEach(function(c){ const v=c.v[k]; map[c.label]=(v===null||v===undefined||isNaN(v))?null:v; });
+    const vv=cols.map(function(c){ return Object.prototype.hasOwnProperty.call(map,c.label)? map[c.label] : null; });
+    if(vv.some(function(v){ return v!==null; })) series.push({name:o.name, color:o.color, vals:vv});
+  });
+  const multi=series.length>1;
 
   document.getElementById('chartTitle').textContent=row.n;
   document.getElementById('chartSub').textContent=
@@ -752,12 +752,11 @@ function drawChart(k){
   document.getElementById('chartTag').textContent=(isAmt?'柱状图 · ':'折线图 · ')+unit;
 
   const lg=document.getElementById('chartLegend');
-  lg.innerHTML=has2
-    ? ('<span><i style="background:'+C1+'"></i>'+esc(nMain)+'</span><span><i style="background:'+C2+'"></i>'+esc(nOther)+'</span>')
+  lg.innerHTML=multi
+    ? series.map(function(s){ return '<span><i style="background:'+s.color+'"></i>'+esc(s.name)+'</span>'; }).join('')
     : '';
-  const vals=cols.map(function(c){ const v=c.v[k]; return (v===null||v===undefined||isNaN(v))?null:v; });
-  let pool=vals.filter(function(v){ return v!==null; });
-  if(has2) pool=pool.concat(vals2.filter(function(v){ return v!==null; }));
+  let pool=[];
+  series.forEach(function(s){ pool=pool.concat(s.vals.filter(function(v){ return v!==null; })); });
   if(!pool.length){
     host.innerHTML='<div style="padding:34px;text-align:center;color:#8a94a6;font-size:12.5px">该科目在所选区间内没有数据</div>';
     return;
@@ -811,21 +810,24 @@ function drawChart(k){
   });
 
   if(isAmt){
-    const gW=Math.min(86, step*0.62);
-    const bW=has2? Math.max(4,(gW-3)/2) : gW;
+    const gW=Math.min(92, step*0.66);
+    const cnt=series.length;
+    const gap=cnt>2? 2 : 3;
+    const bW=cnt>1? Math.max(3,(gW-gap*(cnt-1))/cnt) : gW;
     cols.forEach(function(c,i){
-      const draw=function(v,color,dx,w,label){
+      const draw=function(v,color,dx,w){
         if(v===null) return;
         const yv=Y(v);
         const top=Math.min(yv,y0), hgt=Math.max(1, Math.abs(yv-y0));
         g+='<rect x="'+dx.toFixed(1)+'" y="'+top.toFixed(1)+'" width="'+w.toFixed(1)+'" height="'+hgt.toFixed(1)+'" rx="1.5" fill="'+color+'"/>';
       };
-      if(has2){
-        draw(vals[i], curColor, X(i)-gW/2, bW, n1);
-        draw(vals2[i], othColor, X(i)-gW/2+bW+3, bW, n2);
+      if(cnt>1){
+        series.forEach(function(s,si){
+          draw(s.vals[i], s.color, X(i)-gW/2+si*(bW+gap), bW);
+        });
       } else {
         const v=vals[i];
-        draw(v, (v!==null&&v<0)?'#6bbf8f':curColor, X(i)-bW/2, bW, n1);
+        draw(v, (v!==null&&v<0)?'#6bbf8f':curColor, X(i)-bW/2, bW);
         if(step>=42 && v!==null){
           const yv=Y(v), ly=(v>=0? yv-7 : yv+15);
           g+='<text x="'+X(i).toFixed(1)+'" y="'+ly.toFixed(1)+'" text-anchor="middle" font-size="10.5" fill="#5b6a82">'+(Math.abs(v)>=100? v.toFixed(0) : v.toFixed(2))+'</text>';
@@ -833,23 +835,24 @@ function drawChart(k){
       }
     });
   } else {
-    const line=function(series,color,name){
+    const line=function(vs,color,name){
       let d='', started=false;
-      series.forEach(function(v,i){
+      vs.forEach(function(v,i){
         if(v===null){ started=false; return; }
         d+=(started?'L':'M')+X(i).toFixed(1)+','+Y(v).toFixed(1)+' ';
         started=true;
       });
       if(!d) return;
       g+='<path d="'+d+'" fill="none" stroke="'+color+'" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>';
-      series.forEach(function(v,i){
+      vs.forEach(function(v,i){
         if(v===null) return;
-        g+='<circle cx="'+X(i).toFixed(1)+'" cy="'+Y(v).toFixed(1)+'" r="3.4" fill="#fff" stroke="'+(has2?color:(v<0?'#dc3545':color))+'" stroke-width="1.8"/>';
+        g+='<circle cx="'+X(i).toFixed(1)+'" cy="'+Y(v).toFixed(1)+'" r="3.4" fill="#fff" stroke="'+(multi?color:(v<0?'#dc3545':color))+'" stroke-width="1.8"/>';
       });
     };
-    if(has2) line(vals2, othColor, n2);
-    line(vals, curColor, n1);
-    if(!has2 && step>=46){
+    // 先画对照序列，当前序列最后画（压在最上层）
+    for(let i=series.length-1;i>=1;i--) line(series[i].vals, series[i].color, series[i].name);
+    line(vals, curColor, curName);
+    if(!multi && step>=46){
       vals.forEach(function(v,i){
         if(v===null) return;
         const ly=(v>=0? Y(v)-9 : Y(v)+16);
@@ -862,7 +865,7 @@ function drawChart(k){
   const band='<rect id="cband" x="0" y="'+padT+'" width="'+step.toFixed(1)+'" height="'+ih.toFixed(1)+'" fill="#e9f1ff" opacity="0"/>';
   const guide='<line id="cguide" x1="0" y1="'+padT+'" x2="0" y2="'+(H-padB)+'" stroke="#b9c8dd" stroke-width="1" stroke-dasharray="3 3" opacity="0"/>';
   const dotSvg=function(color){ return '<circle r="0" fill="#fff" stroke="'+color+'" stroke-width="2.2"/>'; };
-  const dots='<g id="cdots" pointer-events="none">'+dotSvg(curColor)+(has2?dotSvg(othColor):'')+'</g>';
+  const dots='<g id="cdots" pointer-events="none">'+series.map(function(s){ return dotSvg(s.color); }).join('')+'</g>';
   const hit='<rect id="chit" x="'+padL+'" y="'+padT+'" width="'+iw.toFixed(1)+'" height="'+ih.toFixed(1)+'" fill="#fff" fill-opacity="0" pointer-events="all" class="ctip-hit"/>';
 
   host.innerHTML='<div class="ctip" id="ctip"></div>'
@@ -905,13 +908,13 @@ function drawChart(k){
       el.setAttribute('r','4.6');
     };
     if(!isAmt){                                  // 柱状图由列底色带指示，不需要焦点圆点
-      putDot(vals[i]);
-      if(has2) putDot(vals2[i]);
+      series.forEach(function(s){ putDot(s.vals[i]); });
     }
 
     let t='<div class="ctip-h">'+ESC(cols[i].label)+'</div>';
-    t+='<div class="ctip-r"><i style="background:'+curColor+'"></i><span class="n">'+ESC(n1)+'</span><span class="v">'+fmtVal(vals[i])+'</span></div>';
-    if(has2) t+='<div class="ctip-r"><i style="background:'+othColor+'"></i><span class="n">'+ESC(n2)+'</span><span class="v">'+fmtVal(vals2[i])+'</span></div>';
+    series.forEach(function(s){
+      t+='<div class="ctip-r"><i style="background:'+s.color+'"></i><span class="n">'+ESC(s.name)+'</span><span class="v">'+fmtVal(s.vals[i])+'</span></div>';
+    });
     tipEl.innerHTML=t;
     tipEl.classList.add('on');
 
@@ -977,52 +980,59 @@ async function load(input,opt){
   const btn=document.getElementById('go');
   const msg=document.getElementById('msg'), scroll=document.getElementById('scroll');
   const raw=String(input||'').trim();
-  const altRaw=codeEl2.value.trim();
   btn.disabled=true; btn.textContent='提取中…';
   scroll.style.display='none'; msg.style.display='block'; msg.className='';
   try{
     if(!raw) throw new Error('请输入 6 位 A 股代码或公司名称。');
 
+    // 三个输入位：第 1 个必填，后两个可选
+    const slots=[
+      {el:codeEl,  sug:sugMain, val:raw},
+      {el:codeEl2, sug:sugAlt,  val:codeEl2.value.trim()},
+      {el:codeEl3, sug:sugThr,  val:codeEl3.value.trim()}
+    ];
     msg.textContent='正在识别标的…';
-    const r1=await resolveCode(raw, sugMain);
-    if(r1.err) throw new Error(r1.err);
-    if(r1.multi){ msg.className='error'; msg.textContent='「'+raw+'」匹配到 '+r1.multi+' 只标的，请在下方列表中点选（最多显示 12 只，可多打几个字缩小范围）。'; return; }
-    const nc=r1.code;
-    if(r1.picked) codeEl.value=r1.picked;
-
-    // 对比标的（可选）
-    let nc2=null;
-    if(altRaw){
-      const r2=await resolveCode(altRaw, sugAlt);
-      if(r2.err) throw new Error(r2.err.replace('对应的 A 股','对应的对比标的'));
-      if(r2.multi){
-        codeEl2.focus();
+    const picked=[];
+    for(let i=0;i<slots.length;i++){
+      const it=slots[i];
+      if(!it.val) continue;
+      const r=await resolveCode(it.val, it.sug);
+      if(r.err) throw new Error(i===0? r.err : r.err.replace('对应的 A 股','对应的标的'));
+      if(r.multi){
+        it.el.focus();
         msg.className='error';
-        msg.textContent='对比标的「'+altRaw+'」匹配到 '+r2.multi+' 只，请在下方列表中点选（最多显示 12 只）。';
+        msg.textContent=(i===0? '「'+it.val+'」' : '第 '+(i+1)+' 个「'+it.val+'」')
+          +'匹配到 '+r.multi+' 只标的，请在列表中点选（最多显示 12 只）。';
         return;
       }
-      nc2=r2.code;
-      if(r2.picked) codeEl2.value=r2.picked;
-      if(nc2.secucode===nc.secucode) throw new Error('主标的与对比标的是同一只，请换一只或清空对比框。');
+      if(r.picked) it.el.value=r.picked;
+      const dup=picked.filter(function(p){ return p.nc.secucode===r.code.secucode; })[0];
+      if(dup) throw new Error('第 '+(dup.i+1)+' 个与第 '+(i+1)+' 个是同一只（'+r.code.secucode+'），请换一只或留空。');
+      picked.push({nc:r.code, i:i});
     }
+    if(!picked.length) throw new Error('请至少输入一只标的。');
 
-    msg.textContent='正在拉取 '+(nc2? nc.secucode+' 与 '+nc2.secucode : nc.secucode)+' 的利润表数据…';
-    const pack=await Promise.all([fetchAll(nc.secucode), nc2? fetchAll(nc2.secucode).catch(function(){ return []; }) : Promise.resolve(null)]);
-    const data=pack[0], data2=pack[1];
-    if(!data.length) throw new Error('未找到该标的的利润表数据，请确认代码是否正确（当前仅支持 A 股）。');
-    if(nc2 && (!data2 || !data2.length)) throw new Error('对比标的没有取到利润表数据，请确认代码。');
+    msg.textContent='正在拉取 '+picked.map(function(p){ return p.nc.secucode; }).join(' / ')+' 的利润表数据…';
+    const packs=await Promise.all(picked.map(function(p){
+      return fetchAll(p.nc.secucode).catch(function(){ return []; });
+    }));
+    for(let i=0;i<picked.length;i++){
+      if(!packs[i] || !packs[i].length)
+        throw new Error('第 '+(picked[i].i+1)+' 个（'+picked[i].nc.secucode+'）没有取到利润表数据，请确认代码是否正确（当前仅支持 A 股）。');
+    }
 
     const mkIdx=function(arr){
       const o={};
       arr.forEach(function(r){ const q=quarterOf(r); if(q>0) o[(r.REPORT_DATE||'').slice(0,4)+'-'+q]=r; });
       return o;
     };
-    STATE.raw=data; STATE.idx=mkIdx(data); STATE.meta=data[0];
-    STATE.raw2=(data2&&data2.length)? data2 : null;
-    STATE.idx2=STATE.raw2? mkIdx(STATE.raw2) : null;
-    STATE.meta2=STATE.raw2? STATE.raw2[0] : null;
-    STATE.showWhich=1;
+    STATE.list=picked.map(function(p,idx){
+      const d=packs[idx];
+      return {raw:d, idx:mkIdx(d), meta:d[0], code:p.nc.code, color:COLORS[idx]||COLORS[COLORS.length-1]};
+    });
+    STATE.showWhich=0;
 
+    const data=STATE.list[0].raw;
     const years=[...new Set(data.map(function(r){ return +((r.REPORT_DATE||'').slice(0,4)); }))]
                   .filter(function(y){ return y>1990; }).sort(function(a,b){ return a-b; });
     if(!years.length) throw new Error('该标的没有可用报告期。');
@@ -1033,7 +1043,7 @@ async function load(input,opt){
     document.getElementById('hint').textContent=(org&&org!=='通用')
       ? ('报表类型：'+org+' · 数据至 '+(data[0].REPORT_DATE_NAME||''))
       : ('数据更新至 '+(data[0].REPORT_DATE_NAME||'')+' · 按你的定义建模');
-    syncURL(nc.code);
+    syncURL(STATE.list[0].code);
   }catch(e){
     showErr(e.message||'提取失败');
   }finally{
@@ -1074,7 +1084,8 @@ function matrix(){
 document.getElementById('csv').onclick=function(){
   const m=matrix();
   const csv=m.map(r=>r.map(x=>'"'+String(x).replace(/"/g,'""')+'"').join(',')).join('\r\n');
-  const name=(STATE.meta? STATE.meta.SECURITY_NAME_ABBR+'_'+STATE.meta.SECURITY_CODE : 'finance')+'_利润表模型.csv';
+  const nm=STATE.list[STATE.showWhich]||STATE.list[0];
+  const name=(nm&&nm.meta? nm.meta.SECURITY_NAME_ABBR+'_'+nm.meta.SECURITY_CODE : 'finance')+'_利润表模型.csv';
   const blob=new Blob(['\ufeff'+csv],{type:'text/csv;charset=utf-8'});
   const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=name;
   document.body.appendChild(a); a.click();
@@ -1097,6 +1108,7 @@ document.getElementById('tsv').onclick=function(){
 /* ============ 搜索建议 ============ */
 const codeEl=document.getElementById('code');
 const codeEl2=document.getElementById('code2');
+const codeEl3=document.getElementById('code3');
 
 // 给任意输入框绑定联想下拉，返回 {paint} 供程序化调用
 function makeSug(inputEl, sugEl, onPick, onEnter){
@@ -1142,10 +1154,11 @@ function makeSug(inputEl, sugEl, onPick, onEnter){
 
 const sugMain=makeSug(codeEl, document.getElementById('sug'), function(){ load(codeEl.value,{keep:true}); }, function(){ run(); });
 const sugAlt =makeSug(codeEl2, document.getElementById('sug2'), function(){ load(codeEl.value,{keep:true}); }, function(){ run(); });
+const sugThr =makeSug(codeEl3, document.getElementById('sug3'), function(){ load(codeEl.value,{keep:true}); }, function(){ run(); });
 
 document.addEventListener('click',function(e){
   if(!e.target.closest('.field')){
-    sugMain.hide(); sugAlt.hide();
+    sugMain.hide(); sugAlt.hide(); sugThr.hide();
   }
 });
 
@@ -1153,12 +1166,12 @@ document.addEventListener('click',function(e){
 document.getElementById('go').onclick=run;
 ['from','to','rtype','optAsc','optAmt'].forEach(id=>{
   document.getElementById(id).addEventListener('change',function(){
-    if(STATE.raw) render();
-    if(id==='rtype' && STATE.raw) syncURL(normCode(codeEl.value)?.code||'');
+    if(STATE.list.length) render();
+    if(id==='rtype' && STATE.list.length) syncURL(normCode(codeEl.value)?.code||'');
   });
 });
 document.getElementById('optTax').addEventListener('change',function(){
-  if(!STATE.raw) return;
+  if(!STATE.list.length) return;
   render();
   document.getElementById('taxNote').style.color = this.checked?'#a35d00':'';
 });
@@ -1171,6 +1184,8 @@ function syncURL(code){
   if(rt && rt!=='A') p.set('rtype',rt);
   const c2=codeEl2.value.trim();
   if(c2) p.set('code2',c2);
+  const c3=codeEl3.value.trim();
+  if(c3) p.set('code3',c3);
   history.replaceState(null,'','?'+p.toString());
 }
 (function init(){
@@ -1179,6 +1194,8 @@ function syncURL(code){
   codeEl.value=code;
   const code2=q.get('code2');
   if(code2) codeEl2.value=code2;
+  const code3=q.get('code3');
+  if(code3) codeEl3.value=code3;
   const rt=q.get('rtype');
   if(rt && document.querySelector('#rtype option[value="'+rt+'"]')) document.getElementById('rtype').value=rt;
   const range=(q.get('from')&&q.get('to'))?[q.get('from'),q.get('to')]:null;
